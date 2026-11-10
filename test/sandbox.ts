@@ -5,6 +5,7 @@ import { applyPlan } from '../src/apply.ts';
 import { Backup, Documents } from '../src/documents.ts';
 import { parseManifest } from '../src/manifest.ts';
 import { buildPlan, type Plan } from '../src/planner.ts';
+import type { SecretResolver } from '../src/secrets.ts';
 import { emptyState, type State } from '../src/state.ts';
 
 export const TARGETS = `
@@ -29,6 +30,7 @@ mine = "~/src/skills"
 
 export class Sandbox {
   readonly home: string;
+  secrets: Record<string, string> = {};
 
   private constructor(home: string) {
     this.home = home;
@@ -68,17 +70,24 @@ export class Sandbox {
   }
 
   async plan(body: string, state: State = emptyState()): Promise<Plan> {
-    return buildPlan(this.manifest(body), state, this.#context());
+    return buildPlan(this.manifest(body), state, this.context());
   }
 
   async reconcile(body: string, state: State = emptyState()) {
-    const context = this.#context();
+    const context = this.context();
     const plan = await buildPlan(this.manifest(body), state, context);
     return { plan, ...(await applyPlan(plan, state, context)) };
   }
 
-  #context() {
-    return { documents: new Documents(), backup: new Backup(this.path('.backups')) };
+  context() {
+    const resolver: SecretResolver = {
+      resolve: async (ref) => this.secrets[`${ref.scheme}:${ref.name}`],
+    };
+    return {
+      documents: new Documents(),
+      backup: new Backup(this.path('.backups')),
+      secrets: resolver,
+    };
   }
 }
 

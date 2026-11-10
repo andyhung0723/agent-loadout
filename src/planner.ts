@@ -1,10 +1,10 @@
-import { DRIVERS, type DriverContext } from './drivers.ts';
+import { DRIVERS, type DriverContext, type PlanContext } from './drivers.ts';
 import type { Manifest } from './manifest.ts';
 import type { OwnedUnit, State } from './state.ts';
 import { configFiles, describeLocation, desiredUnits, type Unit } from './units.ts';
 
 export type Action =
-  'ok' | 'create' | 'replace' | 'adopt' | 'remove' | 'forget' | 'conflict' | 'missing-source';
+  'ok' | 'create' | 'replace' | 'adopt' | 'remove' | 'forget' | 'conflict' | 'unresolved';
 
 export interface PlanEntry {
   key: string;
@@ -30,14 +30,14 @@ export const CHANGING_ACTIONS: ReadonlySet<Action> = new Set([
   'forget',
 ]);
 
-export const BLOCKED_ACTIONS: ReadonlySet<Action> = new Set(['conflict', 'missing-source']);
+export const BLOCKED_ACTIONS: ReadonlySet<Action> = new Set(['conflict', 'unresolved']);
 
 export async function buildPlan(
   manifest: Manifest,
   state: State,
-  context: DriverContext,
+  context: PlanContext,
 ): Promise<Plan> {
-  const units = await desiredUnits(manifest);
+  const units = await desiredUnits(manifest, context.secrets);
   const desired = new Map(units.map((unit) => [unit.key, unit]));
   const entries: PlanEntry[] = [];
 
@@ -70,7 +70,7 @@ async function planDesired(
     ...(detail ? { detail } : {}),
   });
 
-  if (unit.problem) return entry('missing-source', unit.problem);
+  if (unit.problem) return entry('unresolved', unit.problem);
 
   const observed = await DRIVERS[unit.driver].inspect(
     unit,

@@ -10,6 +10,10 @@ export function stableStringify(value: unknown): string {
   return JSON.stringify(sortKeys(value));
 }
 
+export function fingerprintOf(value: unknown): string {
+  return sha256(stableStringify(value));
+}
+
 export function sha256(text: string): string {
   return 'sha256:' + createHash('sha256').update(text).digest('hex');
 }

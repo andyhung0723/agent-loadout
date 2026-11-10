@@ -107,7 +107,7 @@ describe('link reconcile', () => {
     const { plan } = await box.reconcile(
       `[[skill]]\nname = "ghost"\nfrom = "mine"\nto = ["claude"]\n`,
     );
-    assert.deepEqual(actions(plan), ['missing-source skill:ghost@claude']);
+    assert.deepEqual(actions(plan), ['unresolved skill:ghost@claude']);
   });
 
   test('instructions map to CLAUDE.md / AGENTS.md per tool', async () => {

@@ -102,6 +102,34 @@ codex:
 只處理主 Agent 明確委派的任務。
 ```
 
+### Secrets
+
+String values in `hook`, `mcp`, `plugin` and `marketplace` entries may reference secrets, so the
+manifest can live in git:
+
+```toml
+[[mcp]]
+name = "context7"
+command = "npx"
+args = ["-y", "@upstash/context7-mcp", "--api-key", "${keychain:context7}"]
+headers = { Authorization = "Bearer ${env:GITHUB_TOKEN}" }
+to = ["*"]
+```
+
+| Reference         | Resolved from                                                         |
+| ----------------- | --------------------------------------------------------------------- |
+| `${env:NAME}`     | environment of the `loadout` process                                  |
+| `${keychain:svc}` | macOS Keychain (`security add-generic-password -s svc -a "$USER" -w`) |
+| `$${env:NAME}`    | escape: writes the literal `${env:NAME}`                              |
+
+Secrets are resolved at plan/apply time and written into the target config, where the tools read
+them. They never reach `state.json` (fingerprints are SHA-256), plan output or JSON output. An
+unresolvable reference marks the unit `unresolved` and nothing is written. Rotating a secret
+shows up as `replace`.
+
+Prefer the keychain: `${env:…}` has to be exported in whatever shell runs `loadout apply`, which
+is easy to forget once applies are triggered from the herdr mod.
+
 ## Safety model
 
 - **Ownership.** Only units recorded in `state.json` are ever replaced or removed. Anything else
@@ -119,16 +147,18 @@ codex:
 
 ## Known limits
 
-- Secrets: `import` copies values verbatim and flags likely secrets with a `⚠` comment. Move
-  them to env vars before committing the manifest (secret references are on the roadmap).
+- `import` copies values verbatim and flags likely secrets with a `⚠` comment; swap them for a
+  `${keychain:…}` / `${env:…}` reference before committing the manifest.
+- Backups are full copies of overwritten configs and may contain resolved secrets; they live in a
+  `0700` directory under `~/.local/state/agent-loadout/backups/`.
 - App-managed entries (e.g. Codex's bundled `computer-use` / `node_repl` MCP servers) change on
   app updates; drop them from the manifest instead of owning them.
 - TOML tables defined with dotted keys at the root (`mcp_servers.x.command = …`) are not edited.
 
 ## Roadmap
 
-| Version | Scope                                                                                 |
-| ------- | ------------------------------------------------------------------------------------- |
-| v0.1 ✓  | skills, instructions · import / plan / apply / status                                 |
-| v0.2 ✓  | commands, agents (rendered), hooks / MCP / plugins / marketplaces (owned patches)     |
-| v0.3    | settings fragments, secret references, `doctor` (managed-policy awareness), herdr mod |
+| Version | Scope                                                                                      |
+| ------- | ------------------------------------------------------------------------------------------ |
+| v0.1 ✓  | skills, instructions · import / plan / apply / status                                      |
+| v0.2 ✓  | commands, agents (rendered), hooks / MCP / plugins / marketplaces (owned patches)          |
+| v0.3    | secret references ✓ · settings fragments · `doctor` (managed-policy awareness) · herdr mod |

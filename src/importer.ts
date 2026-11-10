@@ -370,7 +370,9 @@ function renderResource(
 ): string[] {
   const head = [
     ...(looksSecret(resource)
-      ? ['# ⚠ looks like it contains a secret — move it to an env var before committing']
+      ? [
+          '# ⚠ looks like it contains a secret — replace it with "${env:NAME}" or "${keychain:service}" before committing',
+        ]
       : []),
     `[[${resource.kind}]]`,
     `name = ${tomlValue(resource.name)}`,

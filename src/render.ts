@@ -14,14 +14,14 @@ const ACTION_STYLE: Record<Action, { symbol: string; color: Color }> = {
   remove: { symbol: '-', color: 'red' },
   forget: { symbol: '?', color: 'gray' },
   conflict: { symbol: '!', color: 'red' },
-  'missing-source': { symbol: '✗', color: 'red' },
+  unresolved: { symbol: '✗', color: 'red' },
 };
 
 const CELL_STYLE: Record<CellState, { glyph: string; color: Color }> = {
   ok: { glyph: '✓', color: 'green' },
   pending: { glyph: '+', color: 'yellow' },
   conflict: { glyph: '!', color: 'red' },
-  'missing-source': { glyph: '✗', color: 'red' },
+  unresolved: { glyph: '✗', color: 'red' },
   off: { glyph: '·', color: 'gray' },
   'n/a': { glyph: '-', color: 'gray' },
 };
@@ -76,7 +76,7 @@ export function renderStatus(matrix: StatusMatrix): string {
   );
   const legend = styleText(
     'gray',
-    '✓ in place  + pending apply  ! conflict  ✗ missing source  · off  - unsupported',
+    '✓ in place  + pending apply  ! conflict  ✗ unresolved (source/secret)  · off  - unsupported',
   );
   const orphans = matrix.orphans.map(renderEntry);
   return [

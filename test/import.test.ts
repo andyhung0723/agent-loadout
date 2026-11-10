@@ -82,7 +82,7 @@ test('imports links, hooks, mcp and plugins; the resulting plan is adopt-only', 
   );
   assert.match(toml, /#\s+claude: ~\/\.claude\/skills\/synced/);
 
-  const context = { documents: new Documents(), backup: new Backup(box.path('.backups')) };
+  const context = box.context();
   const plan = await buildPlan(parseManifest(toml, box.home), emptyState(), context);
   const notAdopt = plan.entries.filter((entry) => entry.action !== 'adopt');
   assert.deepEqual(notAdopt, []);
@@ -110,7 +110,7 @@ test('same config key with different definitions keeps the key and renames only 
   assert.match(toml, /name = "hub-claude-work"\nkey = "hub"/);
   assert.match(toml, /# ⚠ looks like it contains a secret.*\n\[\[mcp\]\]\nname = "ctx"/);
 
-  const context = { documents: new Documents(), backup: new Backup(box.path('.backups')) };
+  const context = box.context();
   const plan = await buildPlan(parseManifest(toml, box.home), emptyState(), context);
   assert.ok(plan.entries.every((entry) => entry.action === 'adopt'));
 });

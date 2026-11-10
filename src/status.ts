@@ -3,7 +3,7 @@ import type { Action, Plan, PlanEntry } from './planner.ts';
 import { selectTargets } from './selector.ts';
 import { supports } from './units.ts';
 
-export type CellState = 'ok' | 'pending' | 'conflict' | 'missing-source' | 'off' | 'n/a';
+export type CellState = 'ok' | 'pending' | 'conflict' | 'unresolved' | 'off' | 'n/a';
 
 export interface StatusRow {
   resource: string;
@@ -23,10 +23,10 @@ const CELL_FOR_ACTION: Partial<Record<Action, CellState>> = {
   replace: 'pending',
   adopt: 'pending',
   conflict: 'conflict',
-  'missing-source': 'missing-source',
+  unresolved: 'unresolved',
 };
 
-const SEVERITY: CellState[] = ['n/a', 'off', 'ok', 'pending', 'missing-source', 'conflict'];
+const SEVERITY: CellState[] = ['n/a', 'off', 'ok', 'pending', 'unresolved', 'conflict'];
 
 export function toStatusMatrix(manifest: Manifest, plan: Plan): StatusMatrix {
   const cellOf = new Map<string, CellState>();

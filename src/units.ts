@@ -15,7 +15,8 @@ import {
 } from './manifest.ts';
 import { exists } from './observe.ts';
 import { selectTargets } from './selector.ts';
-import { sha256, stableStringify, withoutUndefined, type Plain } from './values.ts';
+import { describeRef, interpolate, type SecretResolver } from './secrets.ts';
+import { fingerprintOf, sha256, withoutUndefined, type Plain } from './values.ts';
 
 export type DriverName = 'link' | 'file' | 'json-key' | 'json-item' | 'toml-table';
 
@@ -65,14 +66,17 @@ export const configFiles = {
   agents: (target: Target) => path.join(target.dir, 'agents'),
 };
 
-export async function desiredUnits(manifest: Manifest): Promise<Unit[]> {
+const VALUE_DRIVERS: ReadonlySet<DriverName> = new Set(['json-key', 'json-item', 'toml-table']);
+
+export async function desiredUnits(manifest: Manifest, secrets: SecretResolver): Promise<Unit[]> {
   const byKey = new Map<string, Unit>();
   for (const resource of manifest.resources) {
     const targets = selectTargets(resource.to, manifest.targets).filter((target) =>
       supports(resource.kind, target.tool),
     );
     for (const target of targets) {
-      for (const unit of await unitsFor(resource, target)) {
+      for (const raw of await unitsFor(resource, target)) {
+        const unit = await resolveSecrets(raw, secrets);
         const clash = byKey.get(unit.key);
         if (clash) {
           throw new ManifestError(
@@ -84,6 +88,15 @@ export async function desiredUnits(manifest: Manifest): Promise<Unit[]> {
     }
   }
   return [...byKey.values()];
+}
+
+async function resolveSecrets(unit: Unit, secrets: SecretResolver): Promise<Unit> {
+  if (!VALUE_DRIVERS.has(unit.driver) || unit.problem) return unit;
+  const { value, missing } = await interpolate(unit.value, secrets);
+  if (missing.length > 0) {
+    return { ...unit, problem: `unresolved secret ${missing.map(describeRef).join(', ')}` };
+  }
+  return { ...unit, value, fingerprint: fingerprintOf(value) };
 }
 
 async function unitsFor(resource: Resource, target: Target): Promise<Unit[]> {
@@ -98,7 +111,7 @@ async function unitsFor(resource: Resource, target: Target): Promise<Unit[]> {
     ...(problem ? { problem } : {}),
   });
   const valueUnit = (locator: Locator, value: unknown) =>
-    make(locator, value, stableStringify(value));
+    make(locator, value, fingerprintOf(value));
 
   switch (resource.kind) {
     case 'instructions':

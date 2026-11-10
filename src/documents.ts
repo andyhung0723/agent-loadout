@@ -111,6 +111,7 @@ export class Backup {
     this.#saved.add(file);
     try {
       const dest = path.join(this.#root, file);
+      await mkdir(this.#root, { recursive: true, mode: 0o700 });
       await mkdir(path.dirname(dest), { recursive: true });
       await copyFile(file, dest);
     } catch (error) {

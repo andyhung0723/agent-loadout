@@ -3,8 +3,9 @@ import path from 'node:path';
 import { writeAtomic, type Backup, type Documents } from './documents.ts';
 import { observe } from './observe.ts';
 import { samePath } from './paths.ts';
+import type { SecretResolver } from './secrets.ts';
 import type { DriverName, Locator, Unit } from './units.ts';
-import { isPlainObject, sha256, stableStringify, type Plain } from './values.ts';
+import { fingerprintOf, isPlainObject, sha256, type Plain } from './values.ts';
 
 export type Observation =
   { state: 'missing' | 'desired' | 'recorded' } | { state: 'other'; detail: string };
@@ -17,6 +18,10 @@ export interface Fingerprints {
 export interface DriverContext {
   documents: Documents;
   backup: Backup;
+}
+
+export interface PlanContext extends DriverContext {
+  secrets: SecretResolver;
 }
 
 interface Driver {
@@ -71,7 +76,7 @@ const jsonKey: Driver = {
   async inspect(locator, fingerprints, { documents }) {
     const current = await documents.jsonGet(locator.file, locator.pointer);
     if (current === undefined) return { state: 'missing' };
-    return compare(stableStringify(current), fingerprints, `has a different value`);
+    return compare(fingerprintOf(current), fingerprints, 'has a different value');
   },
   async put(unit, _recorded, { documents }) {
     await documents.jsonSet(unit.file, unit.pointer, unit.value);
@@ -84,21 +89,21 @@ const jsonKey: Driver = {
 const jsonItem: Driver = {
   async inspect(locator, { desired, recorded }, { documents }) {
     const items = await arrayAt(documents, locator);
-    const fingerprints = items.map(stableStringify);
+    const fingerprints = items.map(fingerprintOf);
     if (desired !== undefined && fingerprints.includes(desired)) return { state: 'desired' };
     if (recorded !== undefined && fingerprints.includes(recorded)) return { state: 'recorded' };
     return { state: 'missing' };
   },
   async put(unit, recorded, { documents }) {
     const items = [...(await arrayAt(documents, unit))];
-    const replaceAt = recorded === undefined ? -1 : items.map(stableStringify).indexOf(recorded);
+    const replaceAt = recorded === undefined ? -1 : items.map(fingerprintOf).indexOf(recorded);
     if (replaceAt >= 0) items[replaceAt] = unit.value;
     else items.push(unit.value);
     await documents.jsonSet(unit.file, unit.pointer, items);
   },
   async remove(locator, recorded, { documents }) {
     const items = (await arrayAt(documents, locator)).filter(
-      (item) => stableStringify(item) !== recorded,
+      (item) => fingerprintOf(item) !== recorded,
     );
     if (items.length > 0) await documents.jsonSet(locator.file, locator.pointer, items);
     else await documents.jsonDelete(locator.file, locator.pointer);
@@ -109,7 +114,7 @@ const tomlTable: Driver = {
   async inspect(locator, fingerprints, { documents }) {
     const current = await documents.tomlGet(locator.file, locator.pointer);
     if (current === undefined) return { state: 'missing' };
-    return compare(stableStringify(current), fingerprints, 'has a different value');
+    return compare(fingerprintOf(current), fingerprints, 'has a different value');
   },
   async put(unit, _recorded, { documents }) {
     if (!isPlainObject(unit.value)) throw new Error('toml-table value must be a table');

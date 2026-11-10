@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { applyPlan } from './apply.ts';
 import { Backup, Documents } from './documents.ts';
+import { createDefaultResolver } from './secrets.ts';
 import { detectTargets, importFromTargets, renderManifest } from './importer.ts';
 import { loadManifest, ManifestError } from './manifest.ts';
 import { exists } from './observe.ts';
@@ -102,7 +103,11 @@ async function loadPlanInputs(context: Context) {
     'backups',
     new Date().toISOString().replaceAll(':', '-'),
   );
-  const drivers = { documents: new Documents(), backup: new Backup(backupDir) };
+  const drivers = {
+    documents: new Documents(),
+    backup: new Backup(backupDir),
+    secrets: createDefaultResolver(),
+  };
   const plan = await buildPlan(manifest, state, drivers);
   return { manifest, state, plan, drivers, backupDir };
 }

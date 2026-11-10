@@ -53,7 +53,7 @@ async function execute(plan: Plan, entry: PlanEntry, context: DriverContext): Pr
     case 'adopt':
     case 'forget':
     case 'conflict':
-    case 'missing-source':
+    case 'unresolved':
       return;
   }
 }
@@ -73,7 +73,7 @@ function recordOwnership(plan: Plan, entry: PlanEntry, units: State['units']): v
       delete units[entry.key];
       return;
     case 'conflict':
-    case 'missing-source':
+    case 'unresolved':
       return;
   }
 }

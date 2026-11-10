@@ -132,7 +132,7 @@ to = ["claude", "codex"]
     const { emptyState } = await import('../src/state.ts');
 
     await box.write('.claude/.claude.json', '{}');
-    const context = { documents: new Documents(), backup: new Backup(box.path('.backups')) };
+    const context = box.context();
     const manifest = box.manifest(MCP.replace('["claude", "codex"]', '["claude"]'));
     const plan = await buildPlan(manifest, emptyState(), context);
     await box.write('.claude/.claude.json', '{"numStartups": 4}');
