@@ -114,3 +114,41 @@ test('same config key with different definitions keeps the key and renames only 
   const plan = await buildPlan(parseManifest(toml, box.home), emptyState(), context);
   assert.ok(plan.entries.every((entry) => entry.action === 'adopt'));
 });
+
+test('.claude.json: inside the profile when present, else ~/.claude.json for the default profile', async () => {
+  await box.write('.claude.json', JSON.stringify({ mcpServers: { home: { command: 'h' } } }));
+  await box.write(
+    '.claude-work/.claude.json',
+    JSON.stringify({ mcpServers: { work: { command: 'w' } } }),
+  );
+
+  const targets = await detectTargets(box.home);
+  const byName = Object.fromEntries(targets.map((t) => [t.name, t.claudeJson]));
+  assert.equal(byName.claude, box.path('.claude.json'));
+  assert.equal(byName['claude-work'], box.path('.claude-work/.claude.json'));
+
+  const toml = renderManifest(await importFromTargets(targets, box.home), box.home);
+  assert.match(
+    toml,
+    /\[targets.claude\]\ntool = "claude"\ndir = "~\/.claude"\ntags = \[\]\nclaude_json = "~\/.claude.json"\n/,
+  );
+  assert.match(toml, /name = "home"[^[]*to = \["claude"\]/);
+  assert.match(toml, /name = "work"[^[]*to = \["claude-work"\]/);
+
+  const context = box.context();
+  const plan = await buildPlan(parseManifest(toml, box.home), emptyState(), context);
+  assert.deepEqual(
+    plan.entries.filter((entry) => entry.action !== 'adopt'),
+    [],
+  );
+  assert.ok(plan.entries.some((entry) => entry.location.startsWith(box.path('.claude.json'))));
+});
+
+test('an explicit claude_json in the manifest wins over detection', async () => {
+  await box.write('.claude.json', '{}');
+  const manifest = parseManifest(
+    `[targets.claude]\ntool = "claude"\ndir = "~/.claude"\nclaude_json = "~/custom.json"\n`,
+    box.home,
+  );
+  assert.equal(manifest.targets[0]!.claudeJson, box.path('custom.json'));
+});

@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { parse } from 'smol-toml';
 import { expandHome } from './paths.ts';
@@ -25,6 +27,8 @@ export interface Target {
   tool: Tool;
   dir: string;
   tags: string[];
+  /** Claude only: where this profile's `.claude.json` (user MCP servers, …) lives. */
+  claudeJson?: string;
 }
 
 interface ResourceBase {
@@ -155,13 +159,33 @@ function parseTargets(table: Reader, home?: string): Target[] {
     if (!(TOOLS as readonly string[]).includes(tool)) {
       throw new ManifestError(`${entry.where('tool')} must be one of: ${TOOLS.join(', ')}`);
     }
+    const dir = expandHome(entry.string('dir'), home);
     return {
       name,
       tool: tool as Tool,
-      dir: expandHome(entry.string('dir'), home),
+      dir,
       tags: entry.optStringArray('tags') ?? [],
+      ...(tool === 'claude'
+        ? {
+            claudeJson: entry.has('claude_json')
+              ? entry.path('claude_json')
+              : detectClaudeJson(dir, home),
+          }
+        : {}),
     };
   });
+}
+
+/**
+ * Claude Code keeps `.claude.json` inside CLAUDE_CONFIG_DIR when that is set, and in the home
+ * folder when it isn't. `~/.claude` is ambiguous, so prefer whichever file exists.
+ */
+export function detectClaudeJson(dir: string, home = os.homedir()): string {
+  const inside = path.join(dir, '.claude.json');
+  const atHome = path.join(home, '.claude.json');
+  if (existsSync(inside)) return inside;
+  if (dir === path.join(home, '.claude') && existsSync(atHome)) return atHome;
+  return inside;
 }
 
 function parseResource(kind: Kind, entry: Reader, sources: Map<string, string>): Resource {

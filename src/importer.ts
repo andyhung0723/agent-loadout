@@ -3,6 +3,7 @@ import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { readOrNull } from './documents.ts';
 import {
+  detectClaudeJson,
   KINDS,
   resourceId,
   SOURCE_FILE_NAME,
@@ -55,6 +56,9 @@ export async function detectTargets(home: string): Promise<Target[]> {
           tool: tool as Tool,
           dir: path.join(home, entry.name),
           tags: profile ? [profile] : [],
+          ...(tool === 'claude'
+            ? { claudeJson: detectClaudeJson(path.join(home, entry.name), home) }
+            : {}),
         },
       ];
     })
@@ -62,28 +66,58 @@ export async function detectTargets(home: string): Promise<Target[]> {
 }
 
 export async function importFromTargets(targets: Target[], home: string): Promise<ImportResult> {
-  const groups = new Map<string, { definition: Definition; targets: Target[] }>();
+  const groups = new Map<string, Group[]>();
   const unmanaged: Unmanaged[] = [];
 
   for (const target of targets) {
     const scan = await scanTarget(target, home);
     unmanaged.push(...scan.unmanaged);
-    for (const definition of scan.definitions) {
-      const key = stableStringify(definition);
-      const group = groups.get(key) ?? { definition, targets: [] };
-      group.targets.push(target);
-      groups.set(key, group);
-    }
+    for (const definition of scan.definitions) addToGroup(groups, definition, target);
   }
 
   const resources = disambiguateNames(
-    [...groups.values()].map(({ definition, targets: selected }) => ({
+    [...groups.values()].flat().map(({ definition, targets: selected }) => ({
       resource: { ...definition, to: compressSelectors(selected, targets) } as Resource,
       targets: selected,
     })),
   ).sort((a, b) => KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) || a.name.localeCompare(b.name));
 
   return { targets, resources, unmanaged };
+}
+
+interface Group {
+  definition: Definition;
+  targets: Target[];
+}
+
+/**
+ * Same base definition → same resource, even when each tool needs its own overrides
+ * (e.g. Claude's explicit `type = "stdio"`). Only conflicting overrides for one tool split it.
+ */
+function addToGroup(groups: Map<string, Group[]>, definition: Definition, target: Target): void {
+  const overrides = 'overrides' in definition ? definition.overrides : {};
+  const own = overrides[target.tool];
+  const baseKey = stableStringify({ ...definition, overrides: undefined });
+  const candidates = groups.get(baseKey) ?? [];
+
+  const compatible = candidates.find((group) => {
+    const usesTool = group.targets.some((member) => member.tool === target.tool);
+    const theirs =
+      'overrides' in group.definition ? group.definition.overrides[target.tool] : undefined;
+    return !usesTool || stableStringify(theirs) === stableStringify(own);
+  });
+
+  if (!compatible) {
+    groups.set(baseKey, [...candidates, { definition, targets: [target] }]);
+    return;
+  }
+  compatible.targets.push(target);
+  if (own && 'overrides' in compatible.definition) {
+    compatible.definition = {
+      ...compatible.definition,
+      overrides: { ...compatible.definition.overrides, [target.tool]: own },
+    };
+  }
 }
 
 export async function scanTarget(
@@ -213,7 +247,7 @@ function importClaudeMcp(value: unknown, home: string): Definition[] {
     if (!isPlainObject(raw)) return [];
     const { type, command, args, env, url, headers, ...rest } = raw;
     const server = mcpServer({ command, args, env, url, headers }, home);
-    const inferredType = server.url ? 'http' : 'stdio';
+    const inferredType = server.url ? 'http' : undefined;
     const claude = withoutUndefined({ ...(type !== inferredType ? { type } : {}), ...rest });
     return [mcpDefinition(name, server, { claude })];
   });
@@ -353,6 +387,7 @@ export function renderManifest(result: ImportResult, home: string): string {
       `tool = ${tomlValue(target.tool)}`,
       `dir = ${show(target.dir)}`,
       `tags = ${tomlValue(target.tags)}`,
+      ...(target.claudeJson ? [`claude_json = ${show(target.claudeJson)}`] : []),
       '',
     );
   }

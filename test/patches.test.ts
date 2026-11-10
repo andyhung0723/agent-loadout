@@ -106,7 +106,6 @@ to = ["claude", "codex"]
     const state = await box.readJson('.claude/.claude.json');
     assert.equal(state.numStartups, 3);
     assert.deepEqual(state.mcpServers.zhtw, {
-      type: 'stdio',
       command: `${box.home}/.local/bin/zhtw-mcp`,
       env: { ZHTW_NO_NETWORK: '1' },
     });

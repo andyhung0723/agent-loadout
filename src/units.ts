@@ -57,7 +57,7 @@ export function describeLocation(locator: Locator): string {
 
 export const configFiles = {
   claudeSettings: (target: Target) => path.join(target.dir, 'settings.json'),
-  claudeState: (target: Target) => path.join(target.dir, '.claude.json'),
+  claudeState: (target: Target) => target.claudeJson ?? path.join(target.dir, '.claude.json'),
   codexConfig: (target: Target) => path.join(target.dir, 'config.toml'),
   codexHooks: (target: Target) => path.join(target.dir, 'hooks.json'),
   instructions: (target: Target) =>
@@ -247,7 +247,7 @@ export function hookGroup(resource: HookResource, tool: Tool): Plain {
 
 function claudeMcp(resource: McpResource): Plain {
   const { command, args, env, url, headers } = resource.server;
-  const base = url ? { type: 'http', url, headers } : { type: 'stdio', command, args, env };
+  const base = url ? { type: 'http', url, headers } : { command, args, env };
   return withoutUndefined({ ...base, ...resource.overrides.claude });
 }
 
