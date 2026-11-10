@@ -73,3 +73,18 @@ test('import marks app-bundled MCP servers and plugins as observe-only', async (
   assert.doesNotMatch(toml, /name = "mine"\nmode/);
   assert.doesNotMatch(toml, /name = "figma@openai-curated"\nmode/);
 });
+
+test('status JSON carries target details and row kind/name/mode for UIs', async () => {
+  await box.write('.codex/config.toml', CONFIG);
+  const manifest = box.manifest(NODE_REPL('["codex"]'));
+  const matrix = toStatusMatrix(manifest, await box.plan(NODE_REPL('["codex"]')));
+  assert.deepEqual(matrix.targetDetails[2], {
+    name: 'codex',
+    tool: 'codex',
+    tags: ['personal'],
+    dir: box.path('.codex'),
+  });
+  assert.equal(matrix.rows[0]!.kind, 'mcp');
+  assert.equal(matrix.rows[0]!.name, 'node_repl');
+  assert.equal(matrix.rows[0]!.observe, true);
+});

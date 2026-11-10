@@ -1,4 +1,4 @@
-import { resourceId, type Manifest } from './manifest.ts';
+import { resourceId, type Kind, type Manifest, type Tool } from './manifest.ts';
 import type { Action, Plan, PlanEntry } from './planner.ts';
 import { selectTargets } from './selector.ts';
 import { supports } from './units.ts';
@@ -8,11 +8,22 @@ export type CellState =
 
 export interface StatusRow {
   resource: string;
+  kind: Kind;
+  name: string;
+  observe: boolean;
   cells: Record<string, CellState>;
+}
+
+export interface StatusTarget {
+  name: string;
+  tool: Tool;
+  tags: string[];
+  dir: string;
 }
 
 export interface StatusMatrix {
   targets: string[];
+  targetDetails: StatusTarget[];
   rows: StatusRow[];
   orphans: PlanEntry[];
   warnings: string[];
@@ -62,11 +73,18 @@ export function toStatusMatrix(manifest: Manifest, plan: Plan): StatusMatrix {
         return [target.name, cellOf.get(`${id}\0${target.name}`) ?? 'off'];
       }),
     );
-    return { resource: id, cells };
+    return {
+      resource: id,
+      kind: resource.kind,
+      name: resource.name,
+      observe: resource.mode === 'observe',
+      cells,
+    };
   });
 
   return {
     targets: manifest.targets.map((target) => target.name),
+    targetDetails: manifest.targets.map(({ name, tool, tags, dir }) => ({ name, tool, tags, dir })),
     rows,
     orphans: plan.entries.filter((entry) => entry.action === 'remove' || entry.action === 'forget'),
     warnings: plan.warnings,
