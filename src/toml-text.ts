@@ -127,3 +127,37 @@ function startsWith(path: string[], prefix: string[]): boolean {
 function range(start: number, end: number): number[] {
   return Array.from({ length: end - start }, (_, offset) => start + offset);
 }
+
+export function replaceKeyInArrayTable(
+  text: string,
+  table: string,
+  index: number,
+  key: string,
+  valueToml: string,
+): string {
+  const lines = text.split('\n');
+  const section = sections(lines).filter(
+    (candidate) => candidate.isArray && candidate.path?.length === 1 && candidate.path[0] === table,
+  )[index];
+  if (!section) throw new Error(`[[${table}]] #${index + 1} not found`);
+
+  const keyPattern = new RegExp(`^\\s*${escapeRegExp(tomlKey(key))}\\s*=`);
+  const start = range(section.start + 1, section.end).find((line) => keyPattern.test(lines[line]!));
+  if (start === undefined) throw new Error(`[[${table}]] #${index + 1} has no "${key}"`);
+
+  let end = start;
+  while (!isBalanced(lines.slice(start, end + 1).join('\n')) && end + 1 < section.end) end++;
+
+  const indent = /^\s*/.exec(lines[start]!)![0];
+  lines.splice(start, end - start + 1, `${indent}${tomlKey(key)} = ${valueToml}`);
+  return lines.join('\n');
+}
+
+function isBalanced(assignment: string): boolean {
+  const value = assignment.replace(/"(?:[^"\\]|\\.)*"|'[^']*'|#.*$/gm, '');
+  return (value.match(/\[/g) ?? []).length === (value.match(/\]/g) ?? []).length;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

@@ -6,7 +6,8 @@ import { applyPlan } from './apply.ts';
 import { Backup, Documents } from './documents.ts';
 import { createDefaultResolver } from './secrets.ts';
 import { detectTargets, importFromTargets, renderManifest } from './importer.ts';
-import { loadManifest, ManifestError } from './manifest.ts';
+import { loadManifest, ManifestError, type Manifest } from './manifest.ts';
+import { toggleInManifest } from './toggle.ts';
 import { exists } from './observe.ts';
 import { DEFAULT_MANIFEST_PATH, DEFAULT_STATE_PATH, expandHome } from './paths.ts';
 import { BLOCKED_ACTIONS, buildPlan } from './planner.ts';
@@ -22,7 +23,10 @@ Commands:
   status     resource × target matrix
   plan       show what apply would change
   apply      reconcile all targets to the manifest
-  import     generate a manifest from the symlinks already in place
+  import     generate a manifest from the current setup
+  toggle <resource> <target> on|off
+             switch a resource for one target: edits "to" in the manifest,
+             then applies just that resource (skip with --no-apply)
 
 Options:
   --manifest <path>  default: $LOADOUT_MANIFEST or ${DEFAULT_MANIFEST_PATH}
@@ -30,6 +34,7 @@ Options:
   --json             machine-readable output
   --write            import: write to the manifest path instead of stdout
   --force            import --write: overwrite an existing manifest
+  --no-apply         toggle: only edit the manifest
 `;
 
 interface Context {
@@ -50,6 +55,7 @@ export async function main(argv: string[]): Promise<number> {
         json: { type: 'boolean', default: false },
         write: { type: 'boolean', default: false },
         force: { type: 'boolean', default: false },
+        'no-apply': { type: 'boolean', default: false },
         help: { type: 'boolean', short: 'h', default: false },
       },
     });
@@ -78,6 +84,8 @@ export async function main(argv: string[]): Promise<number> {
         return await runApply(context);
       case 'import':
         return await runImport(context, { write: values.write, force: values.force });
+      case 'toggle':
+        return await runToggle(context, positionals.slice(1), { apply: !values['no-apply'] });
       case undefined:
       case 'help':
         process.stdout.write(USAGE);
@@ -95,8 +103,8 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
-async function loadPlanInputs(context: Context) {
-  const manifest = await loadManifest(context.manifestPath);
+async function loadPlanInputs(context: Context, preloaded?: Manifest) {
+  const manifest = preloaded ?? (await loadManifest(context.manifestPath));
   const state = await loadState(context.statePath);
   const backupDir = path.join(
     path.dirname(context.statePath),
@@ -168,4 +176,49 @@ async function runImport(
 
 function print(context: Context, data: unknown, text: string): void {
   process.stdout.write((context.json ? JSON.stringify(data, null, 2) : text) + '\n');
+}
+
+async function runToggle(
+  context: Context,
+  args: string[],
+  options: { apply: boolean },
+): Promise<number> {
+  const [resource, target, state] = args;
+  if (!resource || !target || (state !== 'on' && state !== 'off')) {
+    process.stderr.write(`Usage: loadout toggle <resource> <target> on|off\n`);
+    return EXIT.usage;
+  }
+
+  const { manifest, result } = await toggleInManifest(context.manifestPath, {
+    resource,
+    target,
+    enabled: state === 'on',
+  });
+  const summary = result.changed
+    ? `${result.resource} → ${result.target}: ${state}  (to: ${JSON.stringify(result.before)} → ${JSON.stringify(result.after)})`
+    : `${result.resource} → ${result.target}: already ${state}`;
+
+  if (!options.apply || !result.changed) {
+    print(context, { toggle: result }, summary);
+    return EXIT.ok;
+  }
+
+  const inputs = await loadPlanInputs(context, manifest);
+  const scoped = {
+    ...inputs.plan,
+    entries: inputs.plan.entries.filter((entry) => entry.resource === result.resource),
+  };
+  const outcome = await applyPlan(scoped, inputs.state, inputs.drivers);
+  await saveState(context.statePath, outcome.state);
+
+  const restart = `Restart sessions on ${result.target} for the change to load.`;
+  print(
+    context,
+    { toggle: result, results: outcome.results, warnings: scoped.warnings, restart: result.target },
+    [summary, renderApply(outcome.results, scoped.warnings), restart].join('\n'),
+  );
+  const hasProblems = outcome.results.some(
+    (entry) => entry.error || BLOCKED_ACTIONS.has(entry.entry.action),
+  );
+  return hasProblems ? EXIT.blocked : EXIT.ok;
 }

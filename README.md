@@ -19,7 +19,16 @@ loadout import --write    # write it to ~/.config/agent-loadout/loadout.toml
 loadout plan              # dry run (exit 2 if anything is blocked)
 loadout apply             # reconcile; the first run after import only "adopts"
 loadout status [--json]   # resource × target matrix (JSON feeds the herdr mod)
+
+loadout toggle ddd-discovery claude-work on    # flip one resource for one account
+loadout toggle skill:code-review codex-work off --no-apply
 ```
+
+`toggle` rewrites only the `to` line of that entry in the manifest (comments and layout are kept),
+using the smallest change that yields the requested selection: `["*"]` becomes
+`["*", "!codex-work"]`, and turning it back on removes the exclusion again. It then applies **just
+that resource**, so other pending manifest edits are not swept in. Restart sessions on the target
+afterwards: skills, MCP servers and hooks load at session start.
 
 ## What it manages
 
@@ -78,8 +87,9 @@ source = { source = "github", repo = "org/hub" }
 to = ["claude-work"]
 ```
 
-Selectors: `*`, `<target>`, `tag:<tag>`, `tool:<tool>`, prefix `!` to exclude. A leading `~/` in
-`path`, `dir` and `command` is expanded.
+Selectors: `*`, `<target>`, `tag:<tag>`, `tool:<tool>`, prefix `!` to exclude. `to = []` keeps a
+resource in the catalog but off everywhere. A leading `~/` in `path`, `dir` and `command` is
+expanded.
 
 ### Agents
 

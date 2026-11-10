@@ -166,7 +166,7 @@ function parseTargets(table: Reader, home?: string): Target[] {
 
 function parseResource(kind: Kind, entry: Reader, sources: Map<string, string>): Resource {
   const name = entry.string('name');
-  const to = entry.stringArray('to');
+  const to = entry.list('to');
   const key = entry.optString('key');
 
   switch (kind) {
@@ -337,6 +337,14 @@ class Reader {
     const value = this.raw[key];
     if (value === undefined) return undefined;
     if (typeof value !== 'boolean') throw new ManifestError(`${this.where(key)} must be a boolean`);
+    return value;
+  }
+
+  list(key: string): string[] {
+    const value = this.optStringArray(key);
+    if (value === undefined) {
+      throw new ManifestError(`${this.where(key)} is required (use [] to keep it everywhere off)`);
+    }
     return value;
   }
 
