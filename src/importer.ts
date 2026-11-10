@@ -8,6 +8,7 @@ import {
   SOURCE_FILE_NAME,
   TOOLS,
   type HookSpec,
+  type Kind,
   type McpServer,
   type Overrides,
   type Resource,
@@ -23,12 +24,13 @@ import { isPlainObject, stableStringify, withoutUndefined, type Plain } from './
 
 const PROFILE_DIR = new RegExp(`^\\.(${TOOLS.join('|')})(?:-([\\w-]+))?$`);
 
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-type Definition = DistributiveOmit<Resource, 'to'>;
-type Note = (location: string, hint?: string) => void;
+export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+export type Definition = DistributiveOmit<Resource, 'to'>;
+type Note = (kind: Kind, location: string, hint?: string) => void;
 
 export interface Unmanaged {
   target: string;
+  kind: Kind;
   location: string;
   hint?: string;
 }
@@ -84,15 +86,16 @@ export async function importFromTargets(targets: Target[], home: string): Promis
   return { targets, resources, unmanaged };
 }
 
-async function scanTarget(
+export async function scanTarget(
   target: Target,
   home: string,
 ): Promise<{ definitions: Definition[]; unmanaged: Unmanaged[] }> {
   const definitions: Definition[] = [];
   const unmanaged: Unmanaged[] = [];
-  const note: Note = (location, hint) =>
+  const note: Note = (kind, location, hint) =>
     unmanaged.push({
       target: target.name,
+      kind,
       location: collapseHome(location, home),
       ...(hint ? { hint } : {}),
     });
@@ -101,24 +104,24 @@ async function scanTarget(
   if (instructions.type === 'link') {
     definitions.push({ kind: 'instructions', name: 'shared', source: instructions.to });
   } else if (instructions.type === 'other') {
-    note(configFiles.instructions(target));
+    note('instructions', configFiles.instructions(target), 'a real file, not a symlink');
   }
 
   for (const entry of await scanDir(configFiles.skills(target))) {
     if (entry.source) definitions.push({ kind: 'skill', name: entry.name, source: entry.source });
-    else note(entry.path);
+    else note('skill', entry.path, 'a real directory, not a symlink (see `loadout adopt`)');
   }
 
   if (target.tool === 'claude') {
     for (const entry of await scanDir(configFiles.commands(target))) {
       const name = entry.name.replace(/\.md$/, '');
       if (entry.source) definitions.push({ kind: 'command', name, source: entry.source });
-      else note(entry.path);
+      else note('command', entry.path, 'a real file, not a symlink (see `loadout adopt`)');
     }
   }
 
   for (const entry of await scanDir(configFiles.agents(target))) {
-    note(entry.path, 'agents are generated from a neutral source, see README "Agents"');
+    note('agent', entry.path, 'hand-written; convert with `loadout agent extract`');
   }
 
   if (target.tool === 'claude') {
@@ -152,7 +155,11 @@ function importHooks(value: unknown, file: string, home: string, note: Note): De
     groups.forEach((group, index) => {
       const spec = hookSpecOf(group, home);
       if (!spec) {
-        note(`${file} hooks.${event}[${index}]`, 'only single-command hook groups are importable');
+        note(
+          'hook',
+          `${file} hooks.${event}[${index}]`,
+          'only single-command hook groups are importable',
+        );
         return;
       }
       const key = stableStringify(spec);
@@ -258,7 +265,7 @@ function importCodexPlugins(value: unknown, file: string, note: Note): Definitio
   if (!isPlainObject(value)) return [];
   return Object.entries(value).flatMap(([name, raw]): Definition[] => {
     if (!isPlainObject(raw) || Object.keys(raw).some((key) => key !== 'enabled')) {
-      note(`${file} plugins.${name}`, 'has settings beyond "enabled"');
+      note('plugin', `${file} plugins.${name}`, 'has settings beyond "enabled"');
       return [];
     }
     const definition: Definition = { kind: 'plugin', name, enabled: raw.enabled !== false };

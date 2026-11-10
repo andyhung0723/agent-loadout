@@ -1,0 +1,79 @@
+import { scanTarget } from './importer.ts';
+import type { Kind, Manifest, Resource } from './manifest.ts';
+import { collapseHome } from './paths.ts';
+import type { SecretResolver } from './secrets.ts';
+import { describeLocation, desiredUnits, type Unit } from './units.ts';
+
+export interface UnmanagedItem {
+  target: string;
+  kind: Kind;
+  name?: string;
+  location: string;
+  reason: string;
+}
+
+const NO_SECRETS: SecretResolver = { resolve: async () => undefined };
+
+/**
+ * Everything present in the targets that the manifest does not account for:
+ * importable entries missing from the manifest, plus things loadout can't own as they are.
+ */
+export async function findUnmanaged(
+  manifest: Manifest,
+  secrets: SecretResolver,
+  home: string,
+): Promise<UnmanagedItem[]> {
+  const managed = new Set((await desiredUnits(manifest, secrets)).map(signature));
+  const items: UnmanagedItem[] = [];
+
+  for (const target of manifest.targets) {
+    const scan = await scanTarget(target, home);
+    const present: Resource[] = scan.definitions.map((definition) =>
+      withAbsoluteCommand({ ...definition, to: [target.name] } as Resource, home),
+    );
+    const units = await desiredUnits({ targets: [target], resources: present }, NO_SECRETS);
+
+    for (const unit of units) {
+      if (managed.has(signature(unit))) continue;
+      const [kind, ...name] = unit.resource.split(':');
+      items.push({
+        target: target.name,
+        kind: kind as Kind,
+        name: name.join(':'),
+        location: collapseHome(describeLocation(unit), home),
+        reason: 'not in manifest',
+      });
+    }
+    for (const entry of scan.unmanaged) {
+      items.push({
+        target: entry.target,
+        kind: entry.kind,
+        location: entry.location,
+        reason: entry.hint ?? 'not manageable as is',
+      });
+    }
+  }
+  return items;
+}
+
+/** import writes `~/…` for portability; the manifest expands it, so compare like with like. */
+function withAbsoluteCommand(resource: Resource, home: string): Resource {
+  const expand = (command: string | undefined) =>
+    command?.startsWith('~/') ? `${home}${command.slice(1)}` : command;
+  switch (resource.kind) {
+    case 'hook':
+      return { ...resource, spec: { ...resource.spec, command: expand(resource.spec.command)! } };
+    case 'mcp':
+      return {
+        ...resource,
+        server: { ...resource.server, command: expand(resource.server.command) },
+      };
+    default:
+      return resource;
+  }
+}
+
+function signature(unit: Unit): string {
+  const where = `${unit.driver}:${unit.file}#${unit.pointer.join('/')}`;
+  return unit.driver === 'json-item' ? `${where}@${unit.fingerprint}` : where;
+}

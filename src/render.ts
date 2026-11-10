@@ -9,6 +9,7 @@ import {
   type PlanEntry,
 } from './planner.ts';
 import type { CellState, StatusMatrix } from './status.ts';
+import type { UnmanagedItem } from './unmanaged.ts';
 
 type Color = Parameters<typeof styleText>[0];
 
@@ -117,4 +118,20 @@ function summarize(plan: PlanEntry[]): string {
 function renderWarnings(warnings: string[]): string[] {
   if (warnings.length === 0) return [];
   return ['', ...warnings.map((warning) => styleText('yellow', `⚠ ${warning}`))];
+}
+
+export function renderUnmanaged(items: UnmanagedItem[]): string {
+  if (items.length === 0) return 'Unmanaged: none — the manifest covers everything in the targets.';
+  const byTarget = Map.groupBy(items, (item) => item.target);
+  const lines = [`Unmanaged (${items.length}):`];
+  for (const [target, entries] of byTarget) {
+    lines.push(`  ${target}`);
+    for (const item of entries) {
+      const label = item.name ? `${item.kind}:${item.name}` : item.kind;
+      lines.push(
+        `    ${label.padEnd(36)} ${styleText('gray', `${item.location}  (${item.reason})`)}`,
+      );
+    }
+  }
+  return lines.join('\n');
 }
