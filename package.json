@@ -1,0 +1,26 @@
+{
+  "name": "agent-loadout",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Declarative manager for skills, agents, hooks, MCP and plugins across Claude Code / Codex profiles",
+  "type": "module",
+  "bin": {
+    "loadout": "./bin/loadout.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.ts'",
+    "typecheck": "tsc",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "smol-toml": "^1.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "prettier": "^3.9.10",
+    "typescript": "^7.0.2"
+  }
+}
