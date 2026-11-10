@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { applyPlan } from './apply.ts';
+import { Backup, Documents } from './documents.ts';
 import { detectTargets, importFromTargets, renderManifest } from './importer.ts';
 import { loadManifest, ManifestError } from './manifest.ts';
 import { exists } from './observe.ts';
@@ -96,8 +97,14 @@ export async function main(argv: string[]): Promise<number> {
 async function loadPlanInputs(context: Context) {
   const manifest = await loadManifest(context.manifestPath);
   const state = await loadState(context.statePath);
-  const plan = await buildPlan(manifest, state);
-  return { manifest, state, plan };
+  const backupDir = path.join(
+    path.dirname(context.statePath),
+    'backups',
+    new Date().toISOString().replaceAll(':', '-'),
+  );
+  const drivers = { documents: new Documents(), backup: new Backup(backupDir) };
+  const plan = await buildPlan(manifest, state, drivers);
+  return { manifest, state, plan, drivers, backupDir };
 }
 
 async function runStatus(context: Context): Promise<number> {
@@ -109,15 +116,19 @@ async function runStatus(context: Context): Promise<number> {
 
 async function runPlan(context: Context): Promise<number> {
   const { plan } = await loadPlanInputs(context);
-  print(context, { entries: plan }, renderPlan(plan));
-  return plan.some((entry) => BLOCKED_ACTIONS.has(entry.action)) ? EXIT.blocked : EXIT.ok;
+  print(context, { entries: plan.entries, warnings: plan.warnings }, renderPlan(plan));
+  return plan.entries.some((entry) => BLOCKED_ACTIONS.has(entry.action)) ? EXIT.blocked : EXIT.ok;
 }
 
 async function runApply(context: Context): Promise<number> {
-  const { state, plan } = await loadPlanInputs(context);
-  const outcome = await applyPlan(plan, state);
+  const { state, plan, drivers, backupDir } = await loadPlanInputs(context);
+  const outcome = await applyPlan(plan, state, drivers);
   await saveState(context.statePath, outcome.state);
-  print(context, { results: outcome.results }, renderApply(outcome.results));
+  print(
+    context,
+    { results: outcome.results, warnings: plan.warnings, backupDir },
+    renderApply(outcome.results, plan.warnings) + `\nBackups (if any): ${backupDir}`,
+  );
 
   const hasProblems = outcome.results.some(
     (result) => result.error || BLOCKED_ACTIONS.has(result.entry.action),
@@ -130,7 +141,7 @@ async function runImport(
   options: { write: boolean; force: boolean },
 ): Promise<number> {
   const home = os.homedir();
-  const result = await importFromTargets(await detectTargets(home));
+  const result = await importFromTargets(await detectTargets(home), home);
   const toml = renderManifest(result, home);
 
   if (!options.write) {

@@ -1,27 +1,25 @@
-import { linkDestination } from './adapters.ts';
-import { ManifestError, resourceId, type Manifest } from './manifest.ts';
-import { exists, observe } from './observe.ts';
-import { samePath } from './paths.ts';
-import { selectTargets } from './selector.ts';
-import type { State } from './state.ts';
+import { DRIVERS, type DriverContext } from './drivers.ts';
+import type { Manifest } from './manifest.ts';
+import type { OwnedUnit, State } from './state.ts';
+import { configFiles, describeLocation, desiredUnits, type Unit } from './units.ts';
 
 export type Action =
   'ok' | 'create' | 'replace' | 'adopt' | 'remove' | 'forget' | 'conflict' | 'missing-source';
 
 export interface PlanEntry {
+  key: string;
   action: Action;
   resource: string;
   target: string;
-  dest: string;
-  source: string;
+  location: string;
   detail?: string;
 }
 
-interface DesiredLink {
-  resource: string;
-  target: string;
-  dest: string;
-  source: string;
+export interface Plan {
+  entries: PlanEntry[];
+  warnings: string[];
+  desired: Map<string, Unit>;
+  owned: Record<string, OwnedUnit>;
 }
 
 export const CHANGING_ACTIONS: ReadonlySet<Action> = new Set([
@@ -34,70 +32,121 @@ export const CHANGING_ACTIONS: ReadonlySet<Action> = new Set([
 
 export const BLOCKED_ACTIONS: ReadonlySet<Action> = new Set(['conflict', 'missing-source']);
 
-export async function buildPlan(manifest: Manifest, state: State): Promise<PlanEntry[]> {
-  const desired = desiredLinks(manifest);
-  const desiredDests = new Set(desired.map((link) => link.dest));
+export async function buildPlan(
+  manifest: Manifest,
+  state: State,
+  context: DriverContext,
+): Promise<Plan> {
+  const units = await desiredUnits(manifest);
+  const desired = new Map(units.map((unit) => [unit.key, unit]));
+  const entries: PlanEntry[] = [];
 
-  const forDesired = await Promise.all(desired.map((link) => planDesired(link, state)));
-  const forOrphans = await Promise.all(
-    Object.entries(state.links)
-      .filter(([dest]) => !desiredDests.has(dest))
-      .map(([dest, owned]) => planOrphan({ dest, ...owned })),
-  );
-  return [...forDesired, ...forOrphans];
+  for (const unit of units) {
+    entries.push(await planDesired(unit, state.units[unit.key], context));
+  }
+  for (const [key, owned] of Object.entries(state.units)) {
+    if (!desired.has(key)) entries.push(await planOrphan(key, owned, context));
+  }
+
+  return {
+    entries,
+    warnings: await collectWarnings(manifest, units, entries, context),
+    desired,
+    owned: state.units,
+  };
 }
 
-function desiredLinks(manifest: Manifest): DesiredLink[] {
-  const byDest = new Map<string, DesiredLink>();
-  for (const resource of manifest.resources) {
-    for (const target of selectTargets(resource.to, manifest.targets)) {
-      const link = {
-        resource: resourceId(resource),
-        target: target.name,
-        dest: linkDestination(resource.kind, resource.name, target),
-        source: resource.source,
-      };
-      const clash = byDest.get(link.dest);
-      if (clash) {
-        throw new ManifestError(
-          `${link.resource} and ${clash.resource} both claim ${link.dest} on target ${target.name}`,
-        );
-      }
-      byDest.set(link.dest, link);
+async function planDesired(
+  unit: Unit,
+  owned: OwnedUnit | undefined,
+  context: DriverContext,
+): Promise<PlanEntry> {
+  const entry = (action: Action, detail?: string): PlanEntry => ({
+    key: unit.key,
+    action,
+    resource: unit.resource,
+    target: unit.target,
+    location: describeLocation(unit),
+    ...(detail ? { detail } : {}),
+  });
+
+  if (unit.problem) return entry('missing-source', unit.problem);
+
+  const observed = await DRIVERS[unit.driver].inspect(
+    unit,
+    { desired: unit.fingerprint, recorded: owned?.fingerprint },
+    context,
+  );
+  switch (observed.state) {
+    case 'missing':
+      return entry('create');
+    case 'desired':
+      return entry(owned ? 'ok' : 'adopt');
+    case 'recorded':
+      return entry('replace');
+    case 'other':
+      return entry(
+        'conflict',
+        owned ? `modified outside loadout: ${observed.detail}` : `unmanaged: ${observed.detail}`,
+      );
+  }
+}
+
+async function planOrphan(
+  key: string,
+  owned: OwnedUnit,
+  context: DriverContext,
+): Promise<PlanEntry> {
+  const observed = await DRIVERS[owned.driver].inspect(
+    owned,
+    { recorded: owned.fingerprint },
+    context,
+  );
+  const base = {
+    key,
+    resource: owned.resource,
+    target: owned.target,
+    location: describeLocation(owned),
+  };
+  if (observed.state === 'recorded') return { ...base, action: 'remove' };
+  const detail =
+    observed.state === 'missing' ? 'already gone' : 'changed outside loadout, left as is';
+  return { ...base, action: 'forget', detail };
+}
+
+async function collectWarnings(
+  manifest: Manifest,
+  units: Unit[],
+  entries: PlanEntry[],
+  context: DriverContext,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  const codexTargets = manifest.targets.filter((target) => target.tool === 'codex');
+
+  for (const target of codexTargets) {
+    const hooksFile = configFiles.codexHooks(target);
+    const hookUnits = units.filter((unit) => unit.file === hooksFile);
+    if (hookUnits.length === 0) continue;
+
+    const config = configFiles.codexConfig(target);
+    const enabled = await context.documents.tomlGet(config, ['features', 'hooks']);
+    if (enabled !== true) {
+      warnings.push(
+        `${target.name}: hooks are ignored until ${config} has [features] hooks = true`,
+      );
+    }
+
+    const created = entries.some(
+      (entry) =>
+        entry.target === target.name &&
+        (entry.action === 'create' || entry.action === 'replace') &&
+        hookUnits.some((unit) => unit.key === entry.key),
+    );
+    if (created) {
+      warnings.push(
+        `${target.name}: Codex will ask you to trust new or changed hooks on next start`,
+      );
     }
   }
-  return [...byDest.values()];
-}
-
-async function planDesired(link: DesiredLink, state: State): Promise<PlanEntry> {
-  if (!(await exists(link.source))) {
-    return { action: 'missing-source', ...link };
-  }
-
-  const observed = await observe(link.dest);
-  const owned = link.dest in state.links;
-
-  switch (observed.type) {
-    case 'missing':
-      return { action: 'create', ...link };
-    case 'other':
-      return { action: 'conflict', ...link, detail: 'exists and is not a symlink' };
-    case 'link':
-      if (await samePath(observed.to, link.source)) {
-        return { action: owned ? 'ok' : 'adopt', ...link };
-      }
-      return owned
-        ? { action: 'replace', ...link, detail: `was → ${observed.to}` }
-        : { action: 'conflict', ...link, detail: `unmanaged symlink → ${observed.to}` };
-  }
-}
-
-async function planOrphan(link: DesiredLink): Promise<PlanEntry> {
-  const observed = await observe(link.dest);
-  if (observed.type === 'link' && (await samePath(observed.to, link.source))) {
-    return { action: 'remove', ...link };
-  }
-  const detail =
-    observed.type === 'missing' ? 'already gone' : 'changed outside loadout, left as is';
-  return { action: 'forget', ...link, detail };
+  return warnings;
 }
