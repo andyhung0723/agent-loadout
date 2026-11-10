@@ -112,7 +112,7 @@ function isSelected(selectors: string[], targets: Target[], targetName: string):
   return selectTargets(selectors, targets).some((target) => target.name === targetName);
 }
 
-function arrayIndexOf(text: string, resource: Resource): number {
+export function arrayIndexOf(text: string, resource: Resource): number {
   const entries = parse(text)[resource.kind];
   const index = Array.isArray(entries)
     ? entries.findIndex((entry) => (entry as { name?: unknown }).name === resource.name)
