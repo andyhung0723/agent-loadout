@@ -11,6 +11,7 @@ import { detectTargets, importFromTargets, renderManifest } from './importer.ts'
 import { loadManifest, ManifestError, parseManifest, type Manifest } from './manifest.ts';
 import { tomlValue } from './toml-text.ts';
 import { LockError, withLock } from './lock.ts';
+import { scanSharedCodexSkills } from './shared.ts';
 import { toggleInManifest } from './toggle.ts';
 import { findUnmanaged } from './unmanaged.ts';
 import { exists } from './observe.ts';
@@ -163,7 +164,7 @@ async function loadPlanInputs(context: Context, preloaded?: Manifest) {
 
 async function runStatus(context: Context, options: { unmanaged: boolean }): Promise<number> {
   const { manifest, plan, drivers } = await loadPlanInputs(context);
-  const matrix = toStatusMatrix(manifest, plan);
+  const matrix = toStatusMatrix(manifest, plan, await scanSharedCodexSkills(manifest));
   if (!options.unmanaged) {
     print(context, matrix, renderStatus(matrix));
     return EXIT.ok;
@@ -244,9 +245,11 @@ async function runToggle(
     target,
     enabled: state === 'on',
   });
-  const summary = result.changed
-    ? `${result.resource} → ${result.target}: ${state}  (to: ${JSON.stringify(result.before)} → ${JSON.stringify(result.after)})`
-    : `${result.resource} → ${result.target}: already ${state}`;
+  const summary = result.inheritedFrom
+    ? `${result.resource} → ${result.target}: already on (inherited from ${result.inheritedFrom})`
+    : result.changed
+      ? `${result.resource} → ${result.target}: ${state}  (to: ${JSON.stringify(result.before)} → ${JSON.stringify(result.after)})`
+      : `${result.resource} → ${result.target}: already ${state}`;
 
   if (!options.apply || !result.changed) {
     print(context, { toggle: result }, summary);

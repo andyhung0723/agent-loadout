@@ -32,6 +32,7 @@ const CELL_STYLE: Record<CellState, { glyph: string; color: Color }> = {
   unresolved: { glyph: '✗', color: 'red' },
   off: { glyph: '·', color: 'gray' },
   'n/a': { glyph: '-', color: 'gray' },
+  inherited: { glyph: '↥', color: 'cyan' },
   observed: { glyph: '○', color: 'cyan' },
   absent: { glyph: '◌', color: 'gray' },
 };
@@ -86,7 +87,7 @@ export function renderStatus(matrix: StatusMatrix): string {
   );
   const legend = styleText(
     'gray',
-    '✓ in place  + pending apply  ! conflict  ✗ unresolved  ○ observed  ◌ absent (observe-only)  · off  - unsupported',
+    '✓ in place  + pending  ! conflict  ✗ unresolved  ○ observed  ◌ absent  ↥ inherited (shared layer)  · off  - unsupported',
   );
   const orphans = matrix.orphans.map(renderEntry);
   return [

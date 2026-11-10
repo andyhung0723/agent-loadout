@@ -1,10 +1,27 @@
-import { resourceId, type Kind, type Manifest, type Tool } from './manifest.ts';
+import {
+  configKey,
+  resourceId,
+  type Kind,
+  type Manifest,
+  type Resource,
+  type Target,
+  type Tool,
+} from './manifest.ts';
 import type { Action, Plan, PlanEntry } from './planner.ts';
 import { selectTargets } from './selector.ts';
+import type { SharedSkills } from './shared.ts';
 import { supports } from './units.ts';
 
 export type CellState =
-  'ok' | 'pending' | 'conflict' | 'unresolved' | 'observed' | 'absent' | 'off' | 'n/a';
+  | 'ok'
+  | 'pending'
+  | 'conflict'
+  | 'unresolved'
+  | 'observed'
+  | 'absent'
+  | 'inherited'
+  | 'off'
+  | 'n/a';
 
 export interface StatusRow {
   resource: string;
@@ -41,6 +58,7 @@ const CELL_FOR_ACTION: Partial<Record<Action, CellState>> = {
 const SEVERITY: CellState[] = [
   'n/a',
   'off',
+  'inherited',
   'absent',
   'observed',
   'ok',
@@ -49,7 +67,12 @@ const SEVERITY: CellState[] = [
   'conflict',
 ];
 
-export function toStatusMatrix(manifest: Manifest, plan: Plan): StatusMatrix {
+export function toStatusMatrix(
+  manifest: Manifest,
+  plan: Plan,
+  sharedSkills: SharedSkills = new Map(),
+): StatusMatrix {
+  const warnings = [...plan.warnings];
   const cellOf = new Map<string, CellState>();
   for (const entry of plan.entries) {
     const cell =
@@ -69,7 +92,13 @@ export function toStatusMatrix(manifest: Manifest, plan: Plan): StatusMatrix {
     const cells: Record<string, CellState> = Object.fromEntries(
       manifest.targets.map((target): [string, CellState] => {
         if (!supports(resource.kind, target.tool)) return [target.name, 'n/a'];
-        if (!selected.has(target.name)) return [target.name, 'off'];
+        const shared = sharedEntry(resource, target, sharedSkills);
+        if (!selected.has(target.name)) return [target.name, shared ? 'inherited' : 'off'];
+        if (shared) {
+          warnings.push(
+            `${id} on ${target.name} is also in ${shared}; Codex loads that copy for every profile too`,
+          );
+        }
         return [target.name, cellOf.get(`${id}\0${target.name}`) ?? 'off'];
       }),
     );
@@ -87,8 +116,17 @@ export function toStatusMatrix(manifest: Manifest, plan: Plan): StatusMatrix {
     targetDetails: manifest.targets.map(({ name, tool, tags, dir }) => ({ name, tool, tags, dir })),
     rows,
     orphans: plan.entries.filter((entry) => entry.action === 'remove' || entry.action === 'forget'),
-    warnings: plan.warnings,
+    warnings: [...new Set(warnings)],
   };
+}
+
+export function sharedEntry(
+  resource: Resource,
+  target: Target,
+  sharedSkills: SharedSkills,
+): string | undefined {
+  if (resource.kind !== 'skill' || target.tool !== 'codex') return undefined;
+  return sharedSkills.get(configKey(resource));
 }
 
 function worst(current: CellState | undefined, next: CellState): CellState {

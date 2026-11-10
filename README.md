@@ -124,6 +124,25 @@ codex:
 只處理主 Agent 明確委派的任務。
 ```
 
+### Shared layers (Codex `~/.agents/skills`)
+
+Codex loads skills from two places: the profile's own `$CODEX_HOME/skills`, and
+`~/.agents/skills`, which **every** Codex profile loads. (Verified on codex-cli 0.167 from the
+skill list injected into sessions.) Per-account control therefore only works for skills linked
+into `$CODEX_HOME/skills`.
+
+- `status` marks a skill found in the shared folder as `↥ inherited` on every Codex target that
+  doesn't enable it explicitly, and warns when a profile enables it too (it would load twice).
+- `toggle … off` on an inherited cell is refused with a hint; `toggle … on` reports it's already on.
+- `status --unmanaged` lists shared skills the manifest doesn't mention.
+- Keep `~/.agents/skills` for skills every Codex profile should have. Override the folder list
+  with:
+
+```toml
+[shared]
+codex_skills = ["~/.agents/skills"]
+```
+
 ### Secrets
 
 String values in `hook`, `mcp`, `plugin` and `marketplace` entries may reference secrets, so the

@@ -66,6 +66,9 @@ Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts
 6. **Writers hold the lock.** `apply`, `toggle`, `adopt`, `import --write`, `agent extract --add`
    run inside `withLock`. Read-only commands (`status`, `plan`) must not take it.
 7. **Observe mode never writes**, and switching to it releases ownership without deleting.
+8. **Shared layers are facts, not targets.** Codex loads `~/.agents/skills` for every profile;
+   `status` reports such skills as `inherited` and `toggle` refuses per-profile "off" for them.
+   Never present an inherited cell as "off".
 
 ## Conventions
 

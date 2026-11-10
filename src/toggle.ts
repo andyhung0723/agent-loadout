@@ -11,6 +11,8 @@ import {
 } from './manifest.ts';
 import { selectTargets } from './selector.ts';
 import { replaceKeyInArrayTable, tomlValue } from './toml-text.ts';
+import { scanSharedCodexSkills } from './shared.ts';
+import { sharedEntry } from './status.ts';
 import { supports } from './units.ts';
 
 export interface ToggleResult {
@@ -20,6 +22,8 @@ export interface ToggleResult {
   before: string[];
   after: string[];
   changed: boolean;
+  /** Set when the target already gets the resource from a shared layer. */
+  inheritedFrom?: string;
 }
 
 export async function toggleInManifest(
@@ -34,6 +38,28 @@ export async function toggleInManifest(
 
   if (!supports(resource.kind, target.tool)) {
     throw new ManifestError(`${resourceId(resource)} is not supported on ${target.tool} targets`);
+  }
+
+  const shared = sharedEntry(resource, target, await scanSharedCodexSkills(manifest));
+  const selected = selectTargets(resource.to, manifest.targets).some((t) => t.name === target.name);
+  if (shared && !selected) {
+    if (!request.enabled) {
+      throw new ManifestError(
+        `${resourceId(resource)} is loaded by every Codex profile from ${shared}; ` +
+          `it can't be switched off for ${target.name} alone. Move it out of the shared folder ` +
+          `and enable it per profile instead.`,
+      );
+    }
+    const result: ToggleResult = {
+      resource: resourceId(resource),
+      target: target.name,
+      enabled: true,
+      before: resource.to,
+      after: resource.to,
+      changed: false,
+      inheritedFrom: shared,
+    };
+    return { manifest, result };
   }
 
   const after = nextSelectors(resource.to, manifest.targets, target.name, request.enabled);

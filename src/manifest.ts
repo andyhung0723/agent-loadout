@@ -93,7 +93,15 @@ export type Resource =
 export interface Manifest {
   targets: Target[];
   resources: Resource[];
+  /** Folders a tool loads for every profile, regardless of CODEX_HOME / CLAUDE_CONFIG_DIR. */
+  shared?: SharedLayers;
 }
+
+export interface SharedLayers {
+  codexSkills: string[];
+}
+
+export const DEFAULT_CODEX_SHARED_SKILLS = '~/.agents/skills';
 
 export class ManifestError extends Error {
   override name = 'ManifestError';
@@ -149,7 +157,13 @@ export function parseManifest(text: string, home?: string): Manifest {
   for (const resource of resources) {
     assertSelectorsResolve(resource.to, targets, resourceId(resource));
   }
-  return { targets, resources };
+  const sharedTable = root.optTable('shared');
+  const shared: SharedLayers = {
+    codexSkills: (sharedTable.optStringArray('codex_skills') ?? [DEFAULT_CODEX_SHARED_SKILLS]).map(
+      (dir) => expandHome(dir, home),
+    ),
+  };
+  return { targets, resources, shared };
 }
 
 function parseTargets(table: Reader, home?: string): Target[] {

@@ -1,7 +1,8 @@
 import { scanTarget } from './importer.ts';
-import type { Kind, Manifest, Resource } from './manifest.ts';
+import { configKey, type Kind, type Manifest, type Resource } from './manifest.ts';
 import { collapseHome } from './paths.ts';
 import type { SecretResolver } from './secrets.ts';
+import { scanSharedCodexSkills } from './shared.ts';
 import { describeLocation, desiredUnits, type Unit } from './units.ts';
 
 export interface UnmanagedItem {
@@ -53,8 +54,23 @@ export async function findUnmanaged(
       });
     }
   }
+  const covered = new Set(
+    manifest.resources.filter((r) => r.kind === 'skill').map((r) => configKey(r)),
+  );
+  for (const [name, location] of await scanSharedCodexSkills(manifest)) {
+    if (covered.has(name)) continue;
+    items.push({
+      target: SHARED_CODEX_TARGET,
+      kind: 'skill',
+      name,
+      location: collapseHome(location, home),
+      reason: 'loaded by every Codex profile from the shared folder',
+    });
+  }
   return items;
 }
+
+export const SHARED_CODEX_TARGET = 'codex (shared)';
 
 /** import writes `~/…` for portability; the manifest expands it, so compare like with like. */
 function withAbsoluteCommand(resource: Resource, home: string): Resource {
