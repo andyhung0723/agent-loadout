@@ -22,7 +22,19 @@ loadout status [--json]   # resource × target matrix (JSON feeds the herdr mod)
 
 loadout toggle ddd-discovery claude-work on    # flip one resource for one account
 loadout toggle skill:code-review codex-work off --no-apply
+
+loadout status --unmanaged                     # also list what the manifest doesn't cover
+loadout adopt ~/.codex/skills/gsap-core --into ~/agent-config/skills [--dry-run]
+loadout agent extract task-worker --out ~/agent-config/agents/task-worker.md [--add]
 ```
+
+**Bringing existing things under management**
+
+- `adopt` moves a real skill directory (or Claude command file) out of a profile into a source
+  folder, links it back, and appends it to the manifest. A byte-identical copy in another profile
+  is parked in the backups folder and linked to the same source; a different copy is refused.
+- `agent extract` writes a neutral agent source from the existing `.md` / `.toml` copies and
+  reports which profiles it reproduces byte-for-byte; those are adopted without rewriting.
 
 `toggle` rewrites only the `to` line of that entry in the manifest (comments and layout are kept),
 using the smallest change that yields the requested selection: `["*"]` becomes
@@ -154,6 +166,10 @@ is easy to forget once applies are triggered from the herdr mod.
 - **Codex hook trust** is keyed by array index in `config.toml` (`[hooks.state]`). loadout
   appends new hook groups and replaces changed ones in place so existing indices stay stable. It
   never writes trust state: Codex asks you to approve new hooks itself.
+- **One writer at a time.** Commands that write (`apply`, `toggle`, `adopt`, `import --write`,
+  `agent extract --add`) take an inter-process lock next to the state file, so the herdr mod and
+  the CLI can't interleave and lose ownership records. A busy lock waits up to 10 s, then exits
+  75 naming the holder; a lock left by a dead process is taken over.
 
 ## Known limits
 
