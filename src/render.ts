@@ -1,7 +1,13 @@
 import { styleText } from 'node:util';
 import type { ApplyResult } from './apply.ts';
 import { collapseHome } from './paths.ts';
-import { CHANGING_ACTIONS, type Action, type Plan, type PlanEntry } from './planner.ts';
+import {
+  BLOCKED_ACTIONS,
+  CHANGING_ACTIONS,
+  type Action,
+  type Plan,
+  type PlanEntry,
+} from './planner.ts';
 import type { CellState, StatusMatrix } from './status.ts';
 
 type Color = Parameters<typeof styleText>[0];
@@ -15,6 +21,7 @@ const ACTION_STYLE: Record<Action, { symbol: string; color: Color }> = {
   forget: { symbol: '?', color: 'gray' },
   conflict: { symbol: '!', color: 'red' },
   unresolved: { symbol: '✗', color: 'red' },
+  observe: { symbol: '○', color: 'cyan' },
 };
 
 const CELL_STYLE: Record<CellState, { glyph: string; color: Color }> = {
@@ -24,10 +31,14 @@ const CELL_STYLE: Record<CellState, { glyph: string; color: Color }> = {
   unresolved: { glyph: '✗', color: 'red' },
   off: { glyph: '·', color: 'gray' },
   'n/a': { glyph: '-', color: 'gray' },
+  observed: { glyph: '○', color: 'cyan' },
+  absent: { glyph: '◌', color: 'gray' },
 };
 
 export function renderPlan(plan: Plan): string {
-  const visible = plan.entries.filter((entry) => entry.action !== 'ok');
+  const visible = plan.entries.filter(
+    (entry) => entry.action !== 'ok' && entry.action !== 'observe',
+  );
   const body =
     visible.length === 0
       ? ['Nothing to do — all targets match the manifest.']
@@ -42,9 +53,7 @@ export function renderApply(results: ApplyResult[], warnings: string[]): string 
 function renderApplyResults(results: ApplyResult[]): string {
   const changed = results.filter(({ entry }) => CHANGING_ACTIONS.has(entry.action));
   const failed = results.filter((result) => result.error);
-  const blocked = results.filter(
-    ({ entry }) => !CHANGING_ACTIONS.has(entry.action) && entry.action !== 'ok',
-  );
+  const blocked = results.filter(({ entry }) => BLOCKED_ACTIONS.has(entry.action));
 
   if (changed.length === 0 && blocked.length === 0) {
     return 'Nothing to do — all targets match the manifest.';
@@ -76,7 +85,7 @@ export function renderStatus(matrix: StatusMatrix): string {
   );
   const legend = styleText(
     'gray',
-    '✓ in place  + pending apply  ! conflict  ✗ unresolved (source/secret)  · off  - unsupported',
+    '✓ in place  + pending apply  ! conflict  ✗ unresolved  ○ observed  ◌ absent (observe-only)  · off  - unsupported',
   );
   const orphans = matrix.orphans.map(renderEntry);
   return [

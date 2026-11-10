@@ -3,7 +3,8 @@ import type { Action, Plan, PlanEntry } from './planner.ts';
 import { selectTargets } from './selector.ts';
 import { supports } from './units.ts';
 
-export type CellState = 'ok' | 'pending' | 'conflict' | 'unresolved' | 'off' | 'n/a';
+export type CellState =
+  'ok' | 'pending' | 'conflict' | 'unresolved' | 'observed' | 'absent' | 'off' | 'n/a';
 
 export interface StatusRow {
   resource: string;
@@ -26,12 +27,26 @@ const CELL_FOR_ACTION: Partial<Record<Action, CellState>> = {
   unresolved: 'unresolved',
 };
 
-const SEVERITY: CellState[] = ['n/a', 'off', 'ok', 'pending', 'unresolved', 'conflict'];
+const SEVERITY: CellState[] = [
+  'n/a',
+  'off',
+  'absent',
+  'observed',
+  'ok',
+  'pending',
+  'unresolved',
+  'conflict',
+];
 
 export function toStatusMatrix(manifest: Manifest, plan: Plan): StatusMatrix {
   const cellOf = new Map<string, CellState>();
   for (const entry of plan.entries) {
-    const cell = CELL_FOR_ACTION[entry.action];
+    const cell =
+      entry.action === 'observe'
+        ? entry.observation === 'absent'
+          ? 'absent'
+          : 'observed'
+        : CELL_FOR_ACTION[entry.action];
     if (!cell) continue;
     const key = `${entry.resource}\0${entry.target}`;
     cellOf.set(key, worst(cellOf.get(key), cell));

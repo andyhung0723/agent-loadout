@@ -4,7 +4,15 @@ import type { OwnedUnit, State } from './state.ts';
 import { configFiles, describeLocation, desiredUnits, type Unit } from './units.ts';
 
 export type Action =
-  'ok' | 'create' | 'replace' | 'adopt' | 'remove' | 'forget' | 'conflict' | 'unresolved';
+  | 'ok'
+  | 'create'
+  | 'replace'
+  | 'adopt'
+  | 'remove'
+  | 'forget'
+  | 'conflict'
+  | 'unresolved'
+  | 'observe';
 
 export interface PlanEntry {
   key: string;
@@ -13,7 +21,10 @@ export interface PlanEntry {
   target: string;
   location: string;
   detail?: string;
+  observation?: Observation;
 }
+
+export type Observation = 'match' | 'differs' | 'absent';
 
 export interface Plan {
   entries: PlanEntry[];
@@ -70,6 +81,7 @@ async function planDesired(
     ...(detail ? { detail } : {}),
   });
 
+  if (unit.observe) return observeEntry(unit, context, entry);
   if (unit.problem) return entry('unresolved', unit.problem);
 
   const observed = await DRIVERS[unit.driver].inspect(
@@ -90,6 +102,23 @@ async function planDesired(
         owned ? `modified outside loadout: ${observed.detail}` : `unmanaged: ${observed.detail}`,
       );
   }
+}
+
+const OBSERVATION_DETAIL: Record<Observation, string> = {
+  match: 'present, matches manifest',
+  differs: 'present, differs from manifest',
+  absent: 'not present',
+};
+
+async function observeEntry(
+  unit: Unit,
+  context: DriverContext,
+  entry: (action: Action, detail?: string) => PlanEntry,
+): Promise<PlanEntry> {
+  const observed = await DRIVERS[unit.driver].inspect(unit, { desired: unit.fingerprint }, context);
+  const observation: Observation =
+    observed.state === 'missing' ? 'absent' : observed.state === 'desired' ? 'match' : 'differs';
+  return { ...entry('observe', OBSERVATION_DETAIL[observation]), observation };
 }
 
 async function planOrphan(

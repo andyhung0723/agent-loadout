@@ -33,6 +33,7 @@ export interface Unit extends Locator {
   value: unknown;
   fingerprint: string;
   problem?: string;
+  observe?: boolean;
 }
 
 const UNSUPPORTED: Record<Tool, readonly Kind[]> = {
@@ -109,6 +110,7 @@ async function unitsFor(resource: Resource, target: Target): Promise<Unit[]> {
     value,
     fingerprint,
     ...(problem ? { problem } : {}),
+    ...(resource.mode === 'observe' ? { observe: true } : {}),
   });
   const valueUnit = (locator: Locator, value: unknown) =>
     make(locator, value, fingerprintOf(value));

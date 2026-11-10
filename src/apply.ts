@@ -54,6 +54,7 @@ async function execute(plan: Plan, entry: PlanEntry, context: DriverContext): Pr
     case 'forget':
     case 'conflict':
     case 'unresolved':
+    case 'observe':
       return;
   }
 }
@@ -70,6 +71,7 @@ function recordOwnership(plan: Plan, entry: PlanEntry, units: State['units']): v
     }
     case 'remove':
     case 'forget':
+    case 'observe':
       delete units[entry.key];
       return;
     case 'conflict':

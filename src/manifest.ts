@@ -30,6 +30,7 @@ export interface Target {
 interface ResourceBase {
   name: string;
   key?: string;
+  mode?: 'observe';
   to: string[];
 }
 
@@ -137,7 +138,7 @@ export function parseManifest(text: string, home?: string): Manifest {
   );
 
   const resources = KINDS.flatMap((kind) =>
-    root.tableArray(kind).map((entry) => parseResource(kind, entry, sources)),
+    root.tableArray(kind).map((entry) => withMode(parseResource(kind, entry, sources), entry)),
   );
 
   assertUniqueResources(resources);
@@ -211,13 +212,23 @@ function parseResource(kind: Kind, entry: Reader, sources: Map<string, string>):
     case 'plugin':
       return { kind, name, key, to, enabled: entry.optBoolean('enabled') ?? true };
     case 'marketplace': {
-      const { name: _name, key: _key, to: _to, ...config } = entry.raw;
+      const { name: _name, key: _key, mode: _mode, to: _to, ...config } = entry.raw;
       if (Object.keys(config).length === 0) {
         throw new ManifestError(`${entry.where()}: needs marketplace settings such as "source"`);
       }
       return { kind, name, key, to, config };
     }
   }
+}
+
+const MODES = ['manage', 'observe'] as const;
+
+function withMode(resource: Resource, entry: Reader): Resource {
+  const mode = entry.optString('mode') ?? 'manage';
+  if (!(MODES as readonly string[]).includes(mode)) {
+    throw new ManifestError(`${entry.where('mode')} must be one of: ${MODES.join(', ')}`);
+  }
+  return mode === 'observe' ? { ...resource, mode } : resource;
 }
 
 function resolveSource(entry: Reader, fileName: string, sources: Map<string, string>): string {

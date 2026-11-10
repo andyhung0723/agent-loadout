@@ -218,7 +218,8 @@ function importCodexMcp(value: unknown, home: string): Definition[] {
     if (!isPlainObject(raw)) return [];
     const { command, args, env, url, http_headers, ...rest } = raw;
     const server = mcpServer({ command, args, env, url, headers: http_headers }, home);
-    return [mcpDefinition(name, server, { codex: rest })];
+    const definition = mcpDefinition(name, server, { codex: rest });
+    return [isAppManaged(raw) ? { ...definition, mode: 'observe' } : definition];
   });
 }
 
@@ -239,6 +240,13 @@ function mcpDefinition(name: string, server: McpServer, overrides: Overrides): D
   return { kind: 'mcp', name, server, overrides: nonEmpty };
 }
 
+const APP_BUNDLE_PATH = /\/Applications\/|\.app\//;
+const APP_BUNDLED_PLUGIN = /@openai-bundled$/;
+
+function isAppManaged(server: Plain): boolean {
+  return APP_BUNDLE_PATH.test(stableStringify({ command: server.command, env: server.env }));
+}
+
 function importClaudePlugins(value: unknown): Definition[] {
   if (!isPlainObject(value)) return [];
   return Object.entries(value).flatMap(([name, enabled]): Definition[] =>
@@ -253,7 +261,8 @@ function importCodexPlugins(value: unknown, file: string, note: Note): Definitio
       note(`${file} plugins.${name}`, 'has settings beyond "enabled"');
       return [];
     }
-    return [{ kind: 'plugin', name, enabled: raw.enabled !== false }];
+    const definition: Definition = { kind: 'plugin', name, enabled: raw.enabled !== false };
+    return [APP_BUNDLED_PLUGIN.test(name) ? { ...definition, mode: 'observe' } : definition];
   });
 }
 
@@ -377,6 +386,9 @@ function renderResource(
     `[[${resource.kind}]]`,
     `name = ${tomlValue(resource.name)}`,
     ...(resource.key ? [`key = ${tomlValue(resource.key)}`] : []),
+    ...(resource.mode
+      ? [`mode = ${tomlValue(resource.mode)}  # managed by the app itself; loadout only reports it`]
+      : []),
   ];
   const to = `to = ${tomlValue(resource.to)}`;
   const entries = (table: Plain) =>
