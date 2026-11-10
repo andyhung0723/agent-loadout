@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
+import { promisify } from 'node:util';
 import { LockError, withLock } from '../src/lock.ts';
-import { Sandbox } from './sandbox.ts';
+import { Sandbox, TARGETS } from './sandbox.ts';
+
+const run = promisify(execFile);
+const BIN = path.resolve(import.meta.dirname, '../bin/loadout.js');
 
 let box: Sandbox;
 
@@ -12,6 +17,40 @@ beforeEach(async () => {
 });
 
 afterEach(() => box.dispose());
+
+test('concurrent toggles from separate processes never lose ownership records', async () => {
+  const names = ['a', 'b', 'c', 'd', 'e', 'f'];
+  for (const name of names) await mkdir(box.path('src/skills', name), { recursive: true });
+  await box.write(
+    'loadout.toml',
+    TARGETS + names.map((n) => `[[skill]]\nname = "${n}"\nfrom = "mine"\nto = []\n`).join('\n'),
+  );
+
+  await Promise.all(
+    names.map((name) =>
+      run(
+        process.execPath,
+        [
+          BIN,
+          'toggle',
+          name,
+          'claude',
+          'on',
+          '--manifest',
+          box.path('loadout.toml'),
+          '--state',
+          box.path('state/state.json'),
+        ],
+        { env: { ...process.env, HOME: box.home } },
+      ),
+    ),
+  );
+
+  const state = JSON.parse(await readFile(box.path('state/state.json'), 'utf8'));
+  assert.equal(Object.keys(state.units).length, names.length);
+  const manifest = await box.read('loadout.toml');
+  assert.equal(manifest.match(/to = \["claude"\]/g)?.length, names.length);
+});
 
 test('a lock held by a live process times out with a clear message', async () => {
   const dir = box.path('state');
