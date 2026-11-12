@@ -1,8 +1,24 @@
 {
   "name": "agent-loadout",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Declarative manager for skills, agents, hooks, MCP and plugins across Claude Code / Codex profiles",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "agents",
+    "skills",
+    "mcp",
+    "dotfiles",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "Andy Hung",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andyhung0723/agent-loadout.git"
+  },
+  "homepage": "https://github.com/andyhung0723/agent-loadout#readme",
   "type": "module",
   "bin": {
     "loadout": "./bin/loadout.js"

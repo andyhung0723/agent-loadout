@@ -9,11 +9,42 @@ loadout.toml ──▶ units (resource × target) ──plan──▶ actions �
                                    state.json (what loadout owns) ◀──────────┘
 ```
 
+## Install
+
+Requires **Node >= 24** (it runs the TypeScript sources directly, no build step) and pnpm.
+macOS is the main platform: `${keychain:…}` secrets need the `security` tool; everything else
+works on Linux too (CI runs both).
+
+```bash
+git clone https://github.com/andyhung0723/agent-loadout.git
+cd agent-loadout
+pnpm install
+pnpm add -g "link:$PWD"     # puts `loadout` on PATH, pointing at this checkout
+loadout help
+```
+
+`git pull` updates the command in place. Uninstall with `pnpm remove -g agent-loadout`. Without
+a global pnpm setup, a symlink works as well: `ln -s "$PWD/bin/loadout.js" ~/.local/bin/loadout`.
+
+Not on npm yet: Node refuses to strip types from files under `node_modules`
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), so a published package needs a build step first.
+
+### First run, without touching anything
+
+```bash
+loadout import               # preview a manifest derived from every ~/.claude* / ~/.codex*
+loadout import --write       # write ~/.config/agent-loadout/loadout.toml (secrets → keychain)
+loadout plan                 # should list only "adopt": it records what exists, changes nothing
+loadout apply                # take ownership; from here on edit the manifest, or toggle
+```
+
+Paths default to `~/.config/agent-loadout/loadout.toml` and `~/.local/state/agent-loadout/`;
+override with `--manifest` / `--state` or `LOADOUT_MANIFEST` / `LOADOUT_STATE`. Point both at a
+scratch folder to try it on copies first.
+
 ## Usage
 
 ```bash
-pnpm install && pnpm link --global      # exposes `loadout` (Node >= 24, runs TS natively)
-
 loadout import            # print a manifest derived from the current setup
 loadout import --write    # write it to ~/.config/agent-loadout/loadout.toml
 loadout plan              # dry run (exit 2 if anything is blocked)
@@ -255,8 +286,14 @@ is easy to forget once applies are triggered from the herdr mod.
 
 ## Roadmap
 
-| Version | Scope                                                                                      |
-| ------- | ------------------------------------------------------------------------------------------ |
-| v0.1 ✓  | skills, instructions · import / plan / apply / status                                      |
-| v0.2 ✓  | commands, agents (rendered), hooks / MCP / plugins / marketplaces (owned patches)          |
-| v0.3    | secret references ✓ · settings fragments · `doctor` (managed-policy awareness) · herdr mod |
+| Version | Scope                                                                                       |
+| ------- | ------------------------------------------------------------------------------------------- |
+| v0.1 ✓  | skills, instructions · import / plan / apply / status                                       |
+| v0.2 ✓  | commands, agents (rendered), hooks / MCP / plugins / marketplaces (owned patches)           |
+| v0.3 ✓  | secret references · observe mode · toggle · herdr mod · lock · adopt · agent extract        |
+| v0.4 ✓  | Codex shared layer · rebase writes · journal / restore / history · release · prune · --only |
+| next    | settings fragments · `doctor` (managed-policy awareness) · build for npm · manifest include |
+
+## License
+
+[MIT](LICENSE) © 2026 Andy Hung
