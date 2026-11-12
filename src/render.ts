@@ -152,7 +152,7 @@ export function renderHistory(runs: RunSummary[]): string {
 
 const MANIFEST_NOTE: Record<RestoreOutcome['manifest'], string | null> = {
   none: 'The manifest still describes the undone state; the next "loadout apply" redoes it unless you edit the manifest.',
-  restored: 'Manifest restored to its text before the toggle.',
+  restored: 'Manifest restored to its text before that run.',
   restorable: null,
   unchanged: null,
   diverged:
@@ -160,7 +160,9 @@ const MANIFEST_NOTE: Record<RestoreOutcome['manifest'], string | null> = {
 };
 
 export function renderRestore(run: string, outcome: RestoreOutcome, dryRun: boolean): string {
-  if (outcome.results.length === 0) return `Nothing to restore in ${run}.`;
+  if (outcome.results.length === 0 && outcome.manifest === 'none') {
+    return `Nothing to restore in ${run}.`;
+  }
   const verb = dryRun ? 'would restore' : 'restored';
   const lines = outcome.results.map((result) =>
     result.error
@@ -171,7 +173,7 @@ export function renderRestore(run: string, outcome: RestoreOutcome, dryRun: bool
     outcome.manifest !== 'restorable'
       ? MANIFEST_NOTE[outcome.manifest]
       : dryRun
-        ? 'Manifest would be restored to its text before the toggle.'
-        : 'Manifest kept (--only); restore without --only to undo the toggle edit too.';
+        ? 'Manifest would be restored to its text before that run.'
+        : 'Manifest kept (--only); restore without --only to undo its manifest edit too.';
   return [`${verb} from ${run}:`, ...lines, ...(note ? ['', note] : [])].join('\n');
 }

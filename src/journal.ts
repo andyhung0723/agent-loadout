@@ -9,7 +9,7 @@ const JOURNAL = 'journal.json';
 
 export interface JournalEntry {
   key: string;
-  action: Action | 'restore';
+  action: Action | 'restore' | 'release';
   resource: string;
   target: string;
   locator: Locator;

@@ -125,7 +125,7 @@ export function findResource(manifest: Manifest, query: string): Resource {
   throw new ManifestError(`unknown resource "${query}"`);
 }
 
-function findTarget(manifest: Manifest, name: string): Target {
+export function findTarget(manifest: Manifest, name: string): Target {
   const target = manifest.targets.find((candidate) => candidate.name === name);
   if (!target) {
     const known = manifest.targets.map((candidate) => candidate.name).join(', ');
@@ -134,7 +134,7 @@ function findTarget(manifest: Manifest, name: string): Target {
   return target;
 }
 
-function isSelected(selectors: string[], targets: Target[], targetName: string): boolean {
+export function isSelected(selectors: string[], targets: Target[], targetName: string): boolean {
   return selectTargets(selectors, targets).some((target) => target.name === targetName);
 }
 

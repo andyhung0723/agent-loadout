@@ -17,6 +17,7 @@ import {
   type Journal,
   type ManifestChange,
 } from './journal.ts';
+import { applyRelease, planRelease } from './release.ts';
 import { restoreRun } from './restore.ts';
 import { detectTargets, importFromTargets, renderManifest } from './importer.ts';
 import { loadManifest, ManifestError, parseManifest, type Manifest } from './manifest.ts';
@@ -59,6 +60,9 @@ Commands:
   toggle <resource> <target> on|off
              switch a resource for one target: edits "to" in the manifest,
              then applies just that resource (skip with --no-apply)
+  release <resource> [<target>...] [--dry-run]
+             stop managing it on those targets (default: all) and keep the files:
+             drops them from "to" and forgets ownership; nothing is deleted
   history    list journaled runs (apply, toggle, restore), newest first
   restore <run>|latest [--only <resource>[@<target>]]... [--dry-run]
              undo a run entry by entry; entries changed since are left alone.
@@ -152,6 +156,12 @@ export async function main(argv: string[]): Promise<number> {
         return await locked(context, 'toggle', () =>
           runToggle(context, positionals.slice(1), { apply: !values['no-apply'] }),
         );
+      case 'release':
+        return values['dry-run']
+          ? await runRelease(context, positionals.slice(1), { dryRun: true })
+          : await locked(context, 'release', () =>
+              runRelease(context, positionals.slice(1), { dryRun: false }),
+            );
       case 'history':
         return await runHistory(context);
       case 'restore':
@@ -224,7 +234,7 @@ async function journalRun(
   entries: Journal['entries'],
   manifest?: ManifestChange,
 ): Promise<boolean> {
-  if (entries.length === 0) return false;
+  if (entries.length === 0 && !manifest) return false;
   await writeJournal(backupDir, {
     version: 1,
     command,
@@ -412,6 +422,52 @@ async function runToggle(
 
 function undoHint(run: string | null): string {
   return run ? `\nUndo with: loadout restore ${run}` : '';
+}
+
+async function runRelease(
+  context: Context,
+  args: string[],
+  options: { dryRun: boolean },
+): Promise<number> {
+  const [resource, ...targets] = args;
+  if (!resource) {
+    process.stderr.write('Usage: loadout release <resource> [<target>...] [--dry-run]\n');
+    return EXIT.usage;
+  }
+  const state = await loadState(context.statePath);
+  const plan = await planRelease(context.manifestPath, state, { resource, targets });
+
+  let run: string | null = null;
+  if (!options.dryRun) {
+    const outcome = await applyRelease(plan, state);
+    await saveState(context.statePath, outcome.state);
+    const next = newRun(context);
+    const command = `release ${plan.resource} ${plan.targets.join(' ')}`;
+    if (await journalRun(next.backupDir, command, outcome.journal, plan.manifest)) run = next.run;
+  }
+
+  const verb = options.dryRun ? 'would release' : 'released';
+  const lines = [
+    `${verb} ${plan.resource} on ${plan.targets.join(', ')}  (to: ${JSON.stringify(plan.before)} → ${JSON.stringify(plan.after)})`,
+    ...(plan.released.length > 0
+      ? [
+          `  ownership ${options.dryRun ? 'to drop' : 'dropped'}; left in place:`,
+          ...plan.released.map(({ unit, location }) => `    ${unit.target}: ${location}`),
+        ]
+      : ['  nothing was owned there; only the manifest changes']),
+  ];
+  const { manifest: _manifest, released, ...summary } = plan;
+  print(
+    context,
+    {
+      dryRun: options.dryRun,
+      ...summary,
+      released: released.map(({ key, unit, location }) => ({ key, target: unit.target, location })),
+      run,
+    },
+    lines.join('\n') + undoHint(run),
+  );
+  return EXIT.ok;
 }
 
 async function runHistory(context: Context): Promise<number> {

@@ -91,7 +91,7 @@ export async function restoreRun(
     });
   }
 
-  const write = undone.length > 0 && options.only === undefined;
+  const write = options.only === undefined && (undone.length > 0 || journal.entries.length === 0);
   return {
     results,
     state: { ...state, units },

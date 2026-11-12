@@ -23,6 +23,7 @@ loadout status [--json]   # resource × target matrix (JSON feeds the herdr mod)
 loadout toggle ddd-discovery claude-work on    # flip one resource for one account
 loadout toggle skill:code-review codex-work off --no-apply
 
+loadout release ddd-discovery claude-work      # stop managing it there, keep the files
 loadout history                                # journaled runs, newest first
 loadout restore latest [--only mcp:zhtw@codex] [--dry-run]   # undo a run, entry by entry
 
@@ -38,6 +39,12 @@ loadout agent extract task-worker --out ~/agent-config/agents/task-worker.md [--
   is parked in the backups folder and linked to the same source; a different copy is refused.
 - `agent extract` writes a neutral agent source from the existing `.md` / `.toml` copies and
   reports which profiles it reproduces byte-for-byte; those are adopted without rewriting.
+
+**Letting go.** `toggle … off` deletes what loadout put there. `release <resource> [<target>…]`
+(default: every target it's on) instead keeps the files: the targets leave `to` and loadout
+forgets it owned them, so the symlink or config value stays as an unmanaged entry
+(`status --unmanaged` lists it). Use it to hand something back to manual care or another tool.
+Like every write it's journaled, so `restore` takes ownership back.
 
 `toggle` rewrites only the `to` line of that entry in the manifest (comments and layout are kept),
 using the smallest change that yields the requested selection: `["*"]` becomes
@@ -204,7 +211,7 @@ is easy to forget once applies are triggered from the herdr mod.
   its edits are replayed onto the new content; changed → that file is skipped and the key named.
 - **Backups and undo.** Every file loadout overwrites is copied to
   `~/.local/state/agent-loadout/backups/<run>/` first; file modes are preserved. `apply`,
-  `toggle` and `restore` also write `<run>/journal.json`: per entry, the value before and after
+  `toggle`, `release` and `restore` also write `<run>/journal.json`: per entry, the value before and after
   plus the ownership record. `restore <run>` replays it backwards, newest first, and only while
   the location still holds what that run wrote (anything changed since is reported, left alone).
   Unlike copying a whole backup file back, this keeps everything else that changed in the file
@@ -214,7 +221,7 @@ is easy to forget once applies are triggered from the herdr mod.
 - **Codex hook trust** is keyed by array index in `config.toml` (`[hooks.state]`). loadout
   appends new hook groups and replaces changed ones in place so existing indices stay stable. It
   never writes trust state: Codex asks you to approve new hooks itself.
-- **One writer at a time.** Commands that write (`apply`, `toggle`, `adopt`, `import --write`,
+- **One writer at a time.** Commands that write (`apply`, `toggle`, `release`, `restore`, `adopt`, `import --write`,
   `agent extract --add`) take an inter-process lock next to the state file, so the herdr mod and
   the CLI can't interleave and lose ownership records. A busy lock waits up to 10 s, then exits
   75 naming the holder; a lock left by a dead process is taken over.
