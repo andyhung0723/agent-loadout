@@ -1,16 +1,14 @@
-import { readFile } from 'node:fs/promises';
-import { parse } from 'smol-toml';
-import { writeAtomic } from './documents.ts';
+import type { ManifestChange } from './journal.ts';
+import { planToEdit, writeChange } from './manifest-edit.ts';
 import {
+  loadManifest,
   ManifestError,
-  parseManifest,
   resourceId,
   type Manifest,
   type Resource,
   type Target,
 } from './manifest.ts';
 import { selectTargets } from './selector.ts';
-import { replaceKeyInArrayTable, tomlValue } from './toml-text.ts';
 import { scanSharedCodexSkills } from './shared.ts';
 import { sharedEntry } from './status.ts';
 import { supports } from './units.ts';
@@ -30,9 +28,8 @@ export async function toggleInManifest(
   file: string,
   request: { resource: string; target: string; enabled: boolean },
   home?: string,
-): Promise<{ manifest: Manifest; result: ToggleResult }> {
-  const text = await readFile(file, 'utf8');
-  const manifest = parseManifest(text, home);
+): Promise<{ manifest: Manifest; result: ToggleResult; change?: ManifestChange }> {
+  const manifest = await loadManifest(file, home);
   const resource = findResource(manifest, request.resource);
   const target = findTarget(manifest, request.target);
 
@@ -73,21 +70,15 @@ export async function toggleInManifest(
   };
   if (!result.changed) return { manifest, result };
 
-  const index = arrayIndexOf(text, resource);
-  const nextText = replaceKeyInArrayTable(text, resource.kind, index, 'to', tomlValue(after));
-  const nextManifest = parseManifest(nextText, home);
-  const reparsed = findResource(nextManifest, resourceId(resource));
+  const edit = await planToEdit(file, manifest, resource, after, home);
+  const reparsed = findResource(edit.manifest, resourceId(resource));
   if (isSelected(reparsed.to, manifest.targets, target.name) !== request.enabled) {
     throw new Error(
       `internal: rewritten manifest does not reflect the toggle for ${result.resource}`,
     );
   }
-
-  if ((await readFile(file, 'utf8')) !== text) {
-    throw new Error(`${file} changed while toggling — try again`);
-  }
-  await writeAtomic(file, nextText);
-  return { manifest: nextManifest, result };
+  await writeChange(edit.change);
+  return { manifest: edit.manifest, result, change: edit.change };
 }
 
 export function nextSelectors(
@@ -138,11 +129,4 @@ export function isSelected(selectors: string[], targets: Target[], targetName: s
   return selectTargets(selectors, targets).some((target) => target.name === targetName);
 }
 
-export function arrayIndexOf(text: string, resource: Resource): number {
-  const entries = parse(text)[resource.kind];
-  const index = Array.isArray(entries)
-    ? entries.findIndex((entry) => (entry as { name?: unknown }).name === resource.name)
-    : -1;
-  if (index < 0) throw new Error(`internal: [[${resource.kind}]] "${resource.name}" not found`);
-  return index;
-}
+export { arrayIndexOf } from './manifest-edit.ts';

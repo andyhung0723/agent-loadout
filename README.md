@@ -149,6 +149,22 @@ source = { source = "github", repo = "org/hub" }
 to = ["claude-work"]
 ```
 
+### Splitting the manifest
+
+```toml
+include = ["~/agent-config/work.toml", "./mcp.toml"]   # top level of any manifest file
+```
+
+Included files hold targets, sources and resources like the root; everything merges into one
+manifest, so a selector may name a target defined in another file. Relative paths resolve against
+the including file's folder, includes may nest, a file included twice is read once, and a cycle
+is an error. Names stay unique across files (errors name the file). `[shared]` and `[backups]`
+belong to the root only.
+
+`toggle`, `release` and `adopt` edit the file that defines the resource (`adopt` appends new
+entries to the root), and `restore` puts that file back. Typical split: the root and personal
+entries in a personal repo, `include` a work file kept in the company's repo.
+
 Selectors: `*`, `<target>`, `tag:<tag>`, `tool:<tool>`, prefix `!` to exclude. `to = []` keeps a
 resource in the catalog but off everywhere. A leading `~/` in `path`, `dir` and `command` is
 expanded.

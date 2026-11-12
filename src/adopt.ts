@@ -12,18 +12,14 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { writeAtomic } from './documents.ts';
-import {
-  ManifestError,
-  parseManifest,
-  resourceId,
-  type Manifest,
-  type Target,
-} from './manifest.ts';
+import type { ManifestChange } from './journal.ts';
+import { planToEdit, reparse } from './manifest-edit.ts';
+import { loadManifest, ManifestError, resourceId, type Manifest, type Target } from './manifest.ts';
 import { observe } from './observe.ts';
 import { expandHome } from './paths.ts';
 import type { State } from './state.ts';
-import { arrayIndexOf, nextSelectors } from './toggle.ts';
-import { replaceKeyInArrayTable, tomlValue } from './toml-text.ts';
+import { nextSelectors } from './toggle.ts';
+import { tomlValue } from './toml-text.ts';
 import { configFiles, unitKey } from './units.ts';
 
 type AdoptableKind = 'skill' | 'command';
@@ -47,8 +43,7 @@ export interface AdoptOptions {
 
 /** Works out what adopting `input` would do, without touching anything. */
 export async function planAdopt(input: string, options: AdoptOptions): Promise<AdoptPlan> {
-  const manifestText = await readFile(options.manifestPath, 'utf8');
-  const manifest = parseManifest(manifestText, options.home);
+  const manifest = await loadManifest(options.manifestPath, options.home);
   const original = expandHome(input, options.home);
   const { kind, target } = locate(original, manifest);
 
@@ -86,9 +81,7 @@ export async function applyAdopt(
   options: AdoptOptions,
   state: State,
 ): Promise<State> {
-  const manifestText = await readFile(options.manifestPath, 'utf8');
-  const nextText = rewriteManifest(manifestText, plan, options);
-  parseManifest(nextText, options.home);
+  const change = await manifestChangeFor(plan, options);
 
   await relocate(plan, options.backupDir);
   try {
@@ -98,12 +91,14 @@ export async function applyAdopt(
     throw error;
   }
 
-  if ((await readFile(options.manifestPath, 'utf8')) !== manifestText) {
-    throw new Error(
-      `${options.manifestPath} changed during adopt — the link is in place, re-run to record it`,
-    );
+  if (change) {
+    if ((await readFile(change.path, 'utf8')) !== change.before) {
+      throw new Error(
+        `${change.path} changed during adopt — the link is in place, re-run to record it`,
+      );
+    }
+    await writeAtomic(change.path, change.after);
   }
-  await writeAtomic(options.manifestPath, nextText);
 
   const resource = `${plan.kind}:${plan.name}`;
   const locator = { driver: 'link' as const, file: plan.original, pointer: [] };
@@ -153,32 +148,33 @@ async function move(from: string, to: string): Promise<void> {
   }
 }
 
-function rewriteManifest(text: string, plan: AdoptPlan, options: AdoptOptions): string {
+/** New entries go to the root manifest; extending `to` edits the file that defines the entry. */
+async function manifestChangeFor(
+  plan: AdoptPlan,
+  options: AdoptOptions,
+): Promise<ManifestChange | null> {
   switch (plan.manifestChange) {
     case 'none':
-      return text;
+      return null;
     case 'extend-to': {
-      const manifest = parseManifest(text, options.home);
+      const manifest = await loadManifest(options.manifestPath, options.home);
       const resource = manifest.resources.find(
         (r) => r.kind === plan.kind && r.name === plan.name,
       )!;
       const to = nextSelectors(resource.to, manifest.targets, plan.target, true);
-      return replaceKeyInArrayTable(
-        text,
-        plan.kind,
-        arrayIndexOf(text, resource),
-        'to',
-        tomlValue(to),
-      );
+      return (await planToEdit(options.manifestPath, manifest, resource, to, options.home)).change;
     }
     case 'append': {
+      const before = await readFile(options.manifestPath, 'utf8');
       const entry = [
         `[[${plan.kind}]]`,
         `name = ${tomlValue(plan.name)}`,
         `path = ${tomlValue(collapse(plan.source, options.home))}`,
         `to = ${tomlValue([plan.target])}`,
       ].join('\n');
-      return `${text.replace(/\n*$/, '')}\n\n${entry}\n`;
+      const after = `${before.replace(/\n*$/, '')}\n\n${entry}\n`;
+      await reparse(options.manifestPath, { [options.manifestPath]: after }, options.home);
+      return { path: options.manifestPath, before, after };
     }
   }
 }

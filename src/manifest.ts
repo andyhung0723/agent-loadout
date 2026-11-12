@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -96,6 +96,17 @@ export interface Manifest {
   /** Folders a tool loads for every profile, regardless of CODEX_HOME / CLAUDE_CONFIG_DIR. */
   shared?: SharedLayers;
   backups?: Retention;
+  /** File each resource is defined in (resourceId → path), when the manifest came from files. */
+  origins?: Map<string, string>;
+  /** Every manifest file read, root first (the root plus everything it includes). */
+  files?: string[];
+}
+
+export interface ParseOptions {
+  /** Path of `text`; relative `include`s resolve against its folder (default: cwd). */
+  file?: string;
+  /** Reads included files; tests and manifest edits substitute pending text through it. */
+  read?: (file: string) => string;
 }
 
 /** A run is kept while it is among the newest `keep` runs or younger than `maxAgeDays`. */
@@ -140,32 +151,72 @@ export async function loadManifest(file: string, home?: string): Promise<Manifes
     }
     throw error;
   }
-  return parseManifest(text, home);
+  return parseManifest(text, home, { file });
 }
 
-export function parseManifest(text: string, home?: string): Manifest {
-  let raw: Plain;
-  try {
-    raw = parse(text);
-  } catch (error) {
-    throw new ManifestError(`invalid TOML: ${(error as Error).message}`);
+interface ManifestDocument {
+  file: string | undefined;
+  root: Reader;
+  /** Errors in included files name the file; the root keeps its plain messages. */
+  label: string | undefined;
+}
+
+/**
+ * Parses a manifest and everything it `include`s. Targets, sources and resources from all files
+ * form one manifest (names must stay unique across files); `[shared]` / `[backups]` belong to
+ * the root file only.
+ */
+export function parseManifest(text: string, home?: string, options: ParseOptions = {}): Manifest {
+  const read = options.read ?? ((file: string) => readFileSync(file, 'utf8'));
+  const documents = collectDocuments(text, options.file, home, read);
+
+  const targets: Target[] = [];
+  const sources = new Map<string, string>();
+  for (const document of documents) {
+    inFile(document.label, () => {
+      for (const target of parseTargets(document.root.optTable('targets'), home)) {
+        if (targets.some((known) => known.name === target.name)) {
+          throw new ManifestError(`duplicate target: ${target.name}`);
+        }
+        targets.push(target);
+      }
+      const sourceTable = document.root.optTable('sources');
+      for (const alias of Object.keys(sourceTable.raw)) {
+        const dir = sourceTable.path(alias);
+        if (sources.has(alias) && sources.get(alias) !== dir) {
+          throw new ManifestError(`source "${alias}" is defined twice with different paths`);
+        }
+        sources.set(alias, dir);
+      }
+    });
   }
 
-  const root = new Reader(raw, '', home);
-  const targets = parseTargets(root.optTable('targets'), home);
-  const sourceTable = root.optTable('sources');
-  const sources = new Map(
-    Object.keys(sourceTable.raw).map((alias) => [alias, sourceTable.path(alias)]),
-  );
-
-  const resources = KINDS.flatMap((kind) =>
-    root.tableArray(kind).map((entry) => withMode(parseResource(kind, entry, sources), entry)),
-  );
-
-  assertUniqueResources(resources);
-  for (const resource of resources) {
-    assertSelectorsResolve(resource.to, targets, resourceId(resource));
+  const resources: Resource[] = [];
+  const origins = new Map<string, string>();
+  for (const document of documents) {
+    inFile(document.label, () => {
+      const own: Resource[] = [];
+      for (const kind of KINDS) {
+        for (const entry of document.root.tableArray(kind)) {
+          const resource = withMode(parseResource(kind, entry, sources), entry);
+          const id = resourceId(resource);
+          if (resources.some((known) => resourceId(known) === id)) {
+            const first = origins.get(id);
+            throw new ManifestError(
+              `duplicate resource: ${id}${first ? ` (also in ${first})` : ''}`,
+            );
+          }
+          resources.push(resource);
+          own.push(resource);
+          if (document.file) origins.set(id, document.file);
+        }
+      }
+      for (const resource of own)
+        assertSelectorsResolve(resource.to, targets, resourceId(resource));
+    });
   }
+
+  const root = documents[0]!.root;
   const sharedTable = root.optTable('shared');
   const shared: SharedLayers = {
     codexSkills: (sharedTable.optStringArray('codex_skills') ?? [DEFAULT_CODEX_SHARED_SKILLS]).map(
@@ -179,7 +230,82 @@ export function parseManifest(text: string, home?: string): Manifest {
       count(backupTable.optNumber('max_age_days'), 'backups.max_age_days') ??
       DEFAULT_RETENTION.maxAgeDays,
   };
-  return { targets, resources, shared, backups };
+  const files = documents.flatMap((document) => (document.file ? [document.file] : []));
+  return { targets, resources, shared, backups, origins, files };
+}
+
+const ROOT_ONLY = ['shared', 'backups'] as const;
+
+function collectDocuments(
+  text: string,
+  file: string | undefined,
+  home: string | undefined,
+  read: (file: string) => string,
+): ManifestDocument[] {
+  const documents: ManifestDocument[] = [];
+  const loaded = new Set<string>();
+
+  const visit = (text: string, file: string | undefined, chain: string[]) => {
+    const label = chain.length > 0 ? file : undefined;
+    const raw = inFile(label, () => {
+      try {
+        return parse(text);
+      } catch (error) {
+        throw new ManifestError(`invalid TOML: ${(error as Error).message}`);
+      }
+    });
+    const root = new Reader(raw, '', home);
+    if (file) loaded.add(file);
+    documents.push({ file, root, label });
+
+    const includes = inFile(label, () => {
+      if (chain.length > 0) {
+        for (const key of ROOT_ONLY) {
+          if (root.has(key))
+            throw new ManifestError(`[${key}] is only allowed in the root manifest`);
+        }
+      }
+      return root.optStringArray('include') ?? [];
+    });
+    const base = file ? path.dirname(file) : process.cwd();
+    for (const include of includes) {
+      const target = include.startsWith('~')
+        ? expandHome(include, home)
+        : path.resolve(base, include);
+      if (chain.includes(target) || target === file) {
+        throw new ManifestError(`include cycle: ${[...chain, file, target].join(' → ')}`);
+      }
+      if (loaded.has(target)) continue;
+      let included: string;
+      try {
+        included = read(target);
+      } catch (error) {
+        const reason =
+          (error as NodeJS.ErrnoException).code === 'ENOENT'
+            ? 'not found'
+            : (error as Error).message;
+        throw new ManifestError(
+          `${file ?? '<manifest>'}: include "${include}": ${reason} (${target})`,
+        );
+      }
+      visit(included, target, file ? [...chain, file] : chain);
+    }
+  };
+
+  visit(text, file, []);
+  return documents;
+}
+
+/** Prefixes errors from an included file with that file. */
+function inFile<T>(label: string | undefined, run: () => T): T {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof ManifestError && label && !error.message.startsWith(label)) {
+      throw new ManifestError(`${label}: ${error.message}`);
+    }
+    throw error;
+  }
 }
 
 function count(value: number | undefined, where: string): number | undefined {
@@ -314,15 +440,6 @@ function parseOverrides(entry: Reader): Overrides {
       ];
     }),
   );
-}
-
-function assertUniqueResources(resources: Resource[]): void {
-  const seen = new Set<string>();
-  for (const resource of resources) {
-    const id = resourceId(resource);
-    if (seen.has(id)) throw new ManifestError(`duplicate resource: ${id}`);
-    seen.add(id);
-  }
 }
 
 class Reader {

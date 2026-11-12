@@ -53,6 +53,7 @@ manifest.ts ─▶ units.ts ─▶ planner.ts ─▶ apply.ts
 | `release.ts`                            | Drop targets from `to` + forget ownership, never touching disk            |
 | `lock.ts`                               | Inter-process lock for every command that writes                          |
 | `journal.ts` / `restore.ts`             | Per-run before/after journal; undo a run entry by entry                   |
+| `manifest-edit.ts`                      | Edit a resource's `to` in the file defining it; reparse root + includes   |
 | `only.ts`                               | `--only` selectors shared by `plan`, `apply` and `restore`                |
 | `retention.ts`                          | Prune old runs: outside newest `keep` and older than `max_age_days`       |
 | `cli.ts` / `render.ts`                  | Argument handling, text and `--json` output                               |
@@ -75,7 +76,9 @@ Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts
    contains resolved values. Journals (`backups/<run>/journal.json`, 0600) hold snapshots, so
    snapshots must never be attached to printed results.
 3. **Surgical edits.** JSON changes only owned keys/items; TOML is edited per table block;
-   manifest edits (`toggle`, `adopt`, `agent extract --add`) rewrite one entry or append one.
+   manifest edits (`toggle`, `release`, `adopt`, `agent extract --add`) rewrite one entry or
+   append one, in the file that defines it (`manifest.origins`; go through `manifest-edit.ts`)
+   and validate the whole manifest including its `include`s before writing.
    Comments and formatting elsewhere must survive (tests assert byte equality).
 4. **Optimistic writes + backups.** Re-read a file before writing. If it changed since it was read,
    rebase only when every pointer the plan read or edited is unchanged (replay the edits onto the

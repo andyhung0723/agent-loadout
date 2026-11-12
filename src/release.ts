@@ -1,13 +1,11 @@
-import { readFile } from 'node:fs/promises';
-import { writeAtomic } from './documents.ts';
 import type { JournalEntry, ManifestChange } from './journal.ts';
-import { ManifestError, parseManifest, resourceId } from './manifest.ts';
+import { loadManifest, ManifestError, resourceId } from './manifest.ts';
+import { planToEdit, writeChange } from './manifest-edit.ts';
 import { selectTargets } from './selector.ts';
 import { scanSharedCodexSkills } from './shared.ts';
 import type { OwnedUnit, State } from './state.ts';
 import { sharedEntry } from './status.ts';
-import { replaceKeyInArrayTable, tomlValue } from './toml-text.ts';
-import { arrayIndexOf, findResource, findTarget, isSelected, nextSelectors } from './toggle.ts';
+import { findResource, findTarget, isSelected, nextSelectors } from './toggle.ts';
 import { describeLocation } from './units.ts';
 
 export interface ReleasePlan {
@@ -30,8 +28,7 @@ export async function planRelease(
   request: { resource: string; targets: string[] },
   home?: string,
 ): Promise<ReleasePlan> {
-  const text = await readFile(manifestPath, 'utf8');
-  const manifest = parseManifest(text, home);
+  const manifest = await loadManifest(manifestPath, home);
   const resource = findResource(manifest, request.resource);
   const id = resourceId(resource);
   const selected = selectTargets(resource.to, manifest.targets).map((target) => target.name);
@@ -57,14 +54,8 @@ export async function planRelease(
           (selectors, name) => nextSelectors(selectors, manifest.targets, name, false),
           resource.to,
         );
-  const nextText = replaceKeyInArrayTable(
-    text,
-    resource.kind,
-    arrayIndexOf(text, resource),
-    'to',
-    tomlValue(after),
-  );
-  const reparsed = findResource(parseManifest(nextText, home), id);
+  const edit = await planToEdit(manifestPath, manifest, resource, after, home);
+  const reparsed = findResource(edit.manifest, id);
   if (targets.some((name) => isSelected(reparsed.to, manifest.targets, name))) {
     throw new Error(`internal: rewritten manifest still selects a released target of ${id}`);
   }
@@ -79,7 +70,7 @@ export async function planRelease(
     before: resource.to,
     after,
     released,
-    manifest: { path: manifestPath, before: text, after: nextText },
+    manifest: edit.change,
   };
 }
 
@@ -87,10 +78,7 @@ export async function applyRelease(
   plan: ReleasePlan,
   state: State,
 ): Promise<{ state: State; journal: JournalEntry[] }> {
-  if ((await readFile(plan.manifest.path, 'utf8')) !== plan.manifest.before) {
-    throw new Error(`${plan.manifest.path} changed while releasing — try again`);
-  }
-  await writeAtomic(plan.manifest.path, plan.manifest.after);
+  await writeChange(plan.manifest);
 
   const units = { ...state.units };
   const journal: JournalEntry[] = plan.released.map(({ key, unit }) => {

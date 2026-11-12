@@ -28,6 +28,7 @@ import {
   type Manifest,
 } from './manifest.ts';
 import { planPrune, prune } from './retention.ts';
+import { reparse } from './manifest-edit.ts';
 import { filterOnly, OnlyError } from './only.ts';
 import { tomlValue } from './toml-text.ts';
 import { LockError, withLock } from './lock.ts';
@@ -461,8 +462,7 @@ async function runToggle(
     return EXIT.usage;
   }
 
-  const manifestBefore = await readFile(context.manifestPath, 'utf8');
-  const { manifest, result } = await toggleInManifest(context.manifestPath, {
+  const { manifest, result, change } = await toggleInManifest(context.manifestPath, {
     resource,
     target,
     enabled: state === 'on',
@@ -489,11 +489,7 @@ async function runToggle(
     inputs.backupDir,
     `toggle ${result.resource} ${result.target} ${state}`,
     outcome.journal,
-    {
-      path: context.manifestPath,
-      before: manifestBefore,
-      after: await readFile(context.manifestPath, 'utf8'),
-    },
+    change,
   );
   const run = journaled ? inputs.run : null;
 
@@ -692,7 +688,7 @@ async function runAgent(
         `to = ${tomlValue(result.identical)}`,
       ].join('\n');
       const next = `${text.replace(/\n*$/, '')}\n\n${entry}\n`;
-      parseManifest(next);
+      await reparse(context.manifestPath, { [context.manifestPath]: next });
       await writeFile(context.manifestPath, next);
     });
   }
