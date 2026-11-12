@@ -43,7 +43,12 @@ manifest.ts ─▶ units.ts ─▶ planner.ts ─▶ apply.ts
 | `importer.ts` / `unmanaged.ts`          | Derive a manifest from targets / list what the manifest doesn't cover     |
 | `toggle.ts` / `adopt.ts` / `agent-*.ts` | Manifest-editing commands                                                 |
 | `lock.ts`                               | Inter-process lock for every command that writes                          |
+| `journal.ts` / `restore.ts`             | Per-run before/after journal; undo a run entry by entry                   |
 | `cli.ts` / `render.ts`                  | Argument handling, text and `--json` output                               |
+
+Every driver also implements `capture` (the value a unit occupies) and `revert` (turn a captured
+`from` into `to`); `apply` journals `capture` before/after each change and `restore.ts` replays
+the journal backwards through `revert`.
 
 Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts`, import it in
 `importer.ts`, and mark unsupported tools in `UNSUPPORTED`. Adding a driver = implement the
@@ -54,8 +59,10 @@ Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts
 1. **Ownership.** Only units recorded in state are replaced or removed. A unit is removed only
    when what's on disk still matches the recorded fingerprint; otherwise it's `forget` or
    `conflict`. Never delete or overwrite something loadout didn't put there.
-2. **No secrets at rest outside target configs.** State stores SHA-256 fingerprints for value
-   drivers; plan/status/JSON output never contains resolved values.
+2. **No secrets at rest outside target configs and the backups folder.** State stores SHA-256
+   fingerprints for value drivers; plan/status/apply/restore output (text and JSON) never
+   contains resolved values. Journals (`backups/<run>/journal.json`, 0600) hold snapshots, so
+   snapshots must never be attached to printed results.
 3. **Surgical edits.** JSON changes only owned keys/items; TOML is edited per table block;
    manifest edits (`toggle`, `adopt`, `agent extract --add`) rewrite one entry or append one.
    Comments and formatting elsewhere must survive (tests assert byte equality).
@@ -64,8 +71,8 @@ Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts
    new content); otherwise abort that file. Back up anything overwritten. Preserve file modes.
 5. **Codex hook trust is index-keyed.** New hook groups are appended; changed ones are replaced in
    place. Never reorder hook arrays, never write `[hooks.state]`.
-6. **Writers hold the lock.** `apply`, `toggle`, `adopt`, `import --write`, `agent extract --add`
-   run inside `withLock`. Read-only commands (`status`, `plan`) must not take it.
+6. **Writers hold the lock.** `apply`, `toggle`, `restore`, `adopt`, `import --write`,
+   `agent extract --add` run inside `withLock`. Read-only commands (`status`, `plan`) must not take it.
 7. **Observe mode never writes**, and switching to it releases ownership without deleting.
 8. **Shared layers are facts, not targets.** Codex loads `~/.agents/skills` for every profile;
    `status` reports such skills as `inherited` and `toggle` refuses per-profile "off" for them.

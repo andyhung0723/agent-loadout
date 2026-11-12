@@ -23,6 +23,9 @@ loadout status [--json]   # resource × target matrix (JSON feeds the herdr mod)
 loadout toggle ddd-discovery claude-work on    # flip one resource for one account
 loadout toggle skill:code-review codex-work off --no-apply
 
+loadout history                                # journaled runs, newest first
+loadout restore latest [--only mcp:zhtw@codex] [--dry-run]   # undo a run, entry by entry
+
 loadout status --unmanaged                     # also list what the manifest doesn't cover
 loadout adopt ~/.codex/skills/gsap-core --into ~/agent-config/skills [--dry-run]
 loadout agent extract task-worker --out ~/agent-config/agents/task-worker.md [--add]
@@ -182,8 +185,15 @@ is easy to forget once applies are triggered from the herdr mod.
   writing. If another process changed it since `plan` (a running Claude session saves
   `.claude.json` constantly), loadout compares only the keys the plan read or edits: unchanged →
   its edits are replayed onto the new content; changed → that file is skipped and the key named.
-- **Backups.** Every file loadout overwrites is copied to
-  `~/.local/state/agent-loadout/backups/<timestamp>/` first. File modes are preserved.
+- **Backups and undo.** Every file loadout overwrites is copied to
+  `~/.local/state/agent-loadout/backups/<run>/` first; file modes are preserved. `apply`,
+  `toggle` and `restore` also write `<run>/journal.json`: per entry, the value before and after
+  plus the ownership record. `restore <run>` replays it backwards, newest first, and only while
+  the location still holds what that run wrote (anything changed since is reported, left alone).
+  Unlike copying a whole backup file back, this keeps everything else that changed in the file
+  since. Undoing a toggle also restores the manifest line if the manifest hasn't been edited
+  since; undoing an `apply` doesn't touch the manifest, so the next `apply` redoes it. A restore
+  is itself journaled, so it can be undone.
 - **Codex hook trust** is keyed by array index in `config.toml` (`[hooks.state]`). loadout
   appends new hook groups and replaces changed ones in place so existing indices stay stable. It
   never writes trust state: Codex asks you to approve new hooks itself.
@@ -196,8 +206,10 @@ is easy to forget once applies are triggered from the herdr mod.
 
 - `import` copies values verbatim and flags likely secrets with a `⚠` comment; swap them for a
   `${keychain:…}` / `${env:…}` reference before committing the manifest.
-- Backups are full copies of overwritten configs and may contain resolved secrets; they live in a
-  `0700` directory under `~/.local/state/agent-loadout/backups/`.
+- Backups and journals may contain resolved secrets; they live in a `0700` directory under
+  `~/.local/state/agent-loadout/backups/` (journals are `0600`). Nothing prunes them yet.
+- `restore` of a TOML table rewrites that block in loadout's own formatting; comments inside the
+  block are only in the full-file backup. Undoing `adopt` isn't journaled.
 - App-managed entries (e.g. Codex's bundled `computer-use` / `node_repl` MCP servers) change on
   app updates; drop them from the manifest instead of owning them.
 - TOML tables defined with dotted keys at the root (`mcp_servers.x.command = …`) are not edited.

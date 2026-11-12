@@ -1,3 +1,5 @@
+import type { RunSummary } from './journal.ts';
+import type { RestoreOutcome } from './restore.ts';
 import { styleText } from 'node:util';
 import type { ApplyResult } from './apply.ts';
 import { collapseHome } from './paths.ts';
@@ -135,4 +137,41 @@ export function renderUnmanaged(items: UnmanagedItem[]): string {
     }
   }
   return lines.join('\n');
+}
+
+export function renderHistory(runs: RunSummary[]): string {
+  if (runs.length === 0) return 'No journaled runs yet.';
+  const width = Math.max(...runs.map((run) => run.id.length));
+  return runs
+    .map(
+      (run) =>
+        `${run.id.padEnd(width)}  ${String(run.changes).padStart(3)} change(s)  ${run.command}`,
+    )
+    .join('\n');
+}
+
+const MANIFEST_NOTE: Record<RestoreOutcome['manifest'], string | null> = {
+  none: 'The manifest still describes the undone state; the next "loadout apply" redoes it unless you edit the manifest.',
+  restored: 'Manifest restored to its text before the toggle.',
+  restorable: null,
+  unchanged: null,
+  diverged:
+    'Manifest was edited after that run and was left alone; the next "loadout apply" follows it.',
+};
+
+export function renderRestore(run: string, outcome: RestoreOutcome, dryRun: boolean): string {
+  if (outcome.results.length === 0) return `Nothing to restore in ${run}.`;
+  const verb = dryRun ? 'would restore' : 'restored';
+  const lines = outcome.results.map((result) =>
+    result.error
+      ? `  ✗ ${result.resource}@${result.target}  ${result.error}`
+      : `  ↺ ${result.resource}@${result.target}  ${result.effect}`,
+  );
+  const note =
+    outcome.manifest !== 'restorable'
+      ? MANIFEST_NOTE[outcome.manifest]
+      : dryRun
+        ? 'Manifest would be restored to its text before the toggle.'
+        : 'Manifest kept (--only); restore without --only to undo the toggle edit too.';
+  return [`${verb} from ${run}:`, ...lines, ...(note ? ['', note] : [])].join('\n');
 }

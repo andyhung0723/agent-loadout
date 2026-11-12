@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,15 @@ import { extractAgent } from './agent-extract.ts';
 import { applyPlan } from './apply.ts';
 import { Backup, Documents } from './documents.ts';
 import { createDefaultResolver } from './secrets.ts';
+import {
+  JournalError,
+  listRuns,
+  loadJournal,
+  writeJournal,
+  type Journal,
+  type ManifestChange,
+} from './journal.ts';
+import { restoreRun } from './restore.ts';
 import { detectTargets, importFromTargets, renderManifest } from './importer.ts';
 import { loadManifest, ManifestError, parseManifest, type Manifest } from './manifest.ts';
 import { tomlValue } from './toml-text.ts';
@@ -17,7 +27,14 @@ import { findUnmanaged } from './unmanaged.ts';
 import { exists } from './observe.ts';
 import { collapseHome, DEFAULT_MANIFEST_PATH, DEFAULT_STATE_PATH, expandHome } from './paths.ts';
 import { BLOCKED_ACTIONS, buildPlan } from './planner.ts';
-import { renderApply, renderPlan, renderStatus, renderUnmanaged } from './render.ts';
+import {
+  renderApply,
+  renderHistory,
+  renderPlan,
+  renderRestore,
+  renderStatus,
+  renderUnmanaged,
+} from './render.ts';
 import { loadState, saveState } from './state.ts';
 import { toStatusMatrix } from './status.ts';
 
@@ -39,6 +56,10 @@ Commands:
   toggle <resource> <target> on|off
              switch a resource for one target: edits "to" in the manifest,
              then applies just that resource (skip with --no-apply)
+  history    list journaled runs (apply, toggle, restore), newest first
+  restore <run>|latest [--only <resource>[@<target>]]... [--dry-run]
+             undo a run entry by entry; entries changed since are left alone.
+             A toggle run's manifest edit is undone too (not with --only)
 
 Options:
   --manifest <path>  default: $LOADOUT_MANIFEST or ${DEFAULT_MANIFEST_PATH}
@@ -73,6 +94,7 @@ export async function main(argv: string[]): Promise<number> {
         out: { type: 'string' },
         add: { type: 'boolean', default: false },
         'dry-run': { type: 'boolean', default: false },
+        only: { type: 'string', multiple: true },
         help: { type: 'boolean', short: 'h', default: false },
       },
     });
@@ -120,6 +142,14 @@ export async function main(argv: string[]): Promise<number> {
         return await locked(context, 'toggle', () =>
           runToggle(context, positionals.slice(1), { apply: !values['no-apply'] }),
         );
+      case 'history':
+        return await runHistory(context);
+      case 'restore':
+        return values['dry-run']
+          ? await runRestore(context, positionals[1], { only: values.only, dryRun: true })
+          : await locked(context, 'restore', () =>
+              runRestore(context, positionals[1], { only: values.only, dryRun: false }),
+            );
       case undefined:
       case 'help':
         process.stdout.write(USAGE);
@@ -133,6 +163,10 @@ export async function main(argv: string[]): Promise<number> {
       process.stderr.write(`manifest: ${error.message}\n`);
       return EXIT.manifest;
     }
+    if (error instanceof JournalError) {
+      process.stderr.write(`${error.message}\n`);
+      return EXIT.usage;
+    }
     if (error instanceof LockError) {
       process.stderr.write(`${error.message}\n`);
       return EXIT.locked;
@@ -145,21 +179,45 @@ function locked(context: Context, command: string, run: () => Promise<number>): 
   return withLock(path.dirname(context.statePath), command, run);
 }
 
-async function loadPlanInputs(context: Context, preloaded?: Manifest) {
-  const manifest = preloaded ?? (await loadManifest(context.manifestPath));
-  const state = await loadState(context.statePath);
-  const backupDir = path.join(
-    path.dirname(context.statePath),
-    'backups',
-    new Date().toISOString().replaceAll(':', '-'),
-  );
+function backupsRoot(context: Context): string {
+  return path.join(path.dirname(context.statePath), 'backups');
+}
+
+function newRun(context: Context) {
+  const base = path.join(backupsRoot(context), timestamp());
+  let backupDir = base;
+  for (let n = 2; existsSync(backupDir); n++) backupDir = `${base}-${n}`;
   const drivers = {
     documents: new Documents(),
     backup: new Backup(backupDir),
     secrets: createDefaultResolver(),
   };
+  return { backupDir, run: path.basename(backupDir), drivers };
+}
+
+async function loadPlanInputs(context: Context, preloaded?: Manifest) {
+  const manifest = preloaded ?? (await loadManifest(context.manifestPath));
+  const state = await loadState(context.statePath);
+  const { backupDir, run, drivers } = newRun(context);
   const plan = await buildPlan(manifest, state, drivers);
-  return { manifest, state, plan, drivers, backupDir };
+  return { manifest, state, plan, drivers, backupDir, run };
+}
+
+async function journalRun(
+  backupDir: string,
+  command: string,
+  entries: Journal['entries'],
+  manifest?: ManifestChange,
+): Promise<boolean> {
+  if (entries.length === 0) return false;
+  await writeJournal(backupDir, {
+    version: 1,
+    command,
+    at: new Date().toISOString(),
+    entries,
+    ...(manifest ? { manifest } : {}),
+  });
+  return true;
 }
 
 async function runStatus(context: Context, options: { unmanaged: boolean }): Promise<number> {
@@ -185,13 +243,14 @@ async function runPlan(context: Context): Promise<number> {
 }
 
 async function runApply(context: Context): Promise<number> {
-  const { state, plan, drivers, backupDir } = await loadPlanInputs(context);
+  const { state, plan, drivers, backupDir, run } = await loadPlanInputs(context);
   const outcome = await applyPlan(plan, state, drivers);
   await saveState(context.statePath, outcome.state);
+  const journaled = await journalRun(backupDir, 'apply', outcome.journal);
   print(
     context,
-    { results: outcome.results, warnings: plan.warnings, backupDir },
-    renderApply(outcome.results, plan.warnings) + `\nBackups (if any): ${backupDir}`,
+    { results: outcome.results, warnings: plan.warnings, backupDir, run: journaled ? run : null },
+    renderApply(outcome.results, plan.warnings) + undoHint(journaled ? run : null),
   );
 
   const hasProblems = outcome.results.some(
@@ -240,6 +299,7 @@ async function runToggle(
     return EXIT.usage;
   }
 
+  const manifestBefore = await readFile(context.manifestPath, 'utf8');
   const { manifest, result } = await toggleInManifest(context.manifestPath, {
     resource,
     target,
@@ -263,17 +323,85 @@ async function runToggle(
   };
   const outcome = await applyPlan(scoped, inputs.state, inputs.drivers);
   await saveState(context.statePath, outcome.state);
+  const journaled = await journalRun(
+    inputs.backupDir,
+    `toggle ${result.resource} ${result.target} ${state}`,
+    outcome.journal,
+    {
+      path: context.manifestPath,
+      before: manifestBefore,
+      after: await readFile(context.manifestPath, 'utf8'),
+    },
+  );
+  const run = journaled ? inputs.run : null;
 
   const restart = `Restart sessions on ${result.target} for the change to load.`;
   print(
     context,
-    { toggle: result, results: outcome.results, warnings: scoped.warnings, restart: result.target },
-    [summary, renderApply(outcome.results, scoped.warnings), restart].join('\n'),
+    {
+      toggle: result,
+      results: outcome.results,
+      warnings: scoped.warnings,
+      restart: result.target,
+      run,
+    },
+    [summary, renderApply(outcome.results, scoped.warnings), restart].join('\n') + undoHint(run),
   );
   const hasProblems = outcome.results.some(
     (entry) => entry.error || BLOCKED_ACTIONS.has(entry.entry.action),
   );
   return hasProblems ? EXIT.blocked : EXIT.ok;
+}
+
+function undoHint(run: string | null): string {
+  return run ? `\nUndo with: loadout restore ${run}` : '';
+}
+
+async function runHistory(context: Context): Promise<number> {
+  const runs = await listRuns(backupsRoot(context));
+  print(context, { runs }, renderHistory(runs));
+  return EXIT.ok;
+}
+
+async function runRestore(
+  context: Context,
+  id: string | undefined,
+  options: { only?: string[]; dryRun: boolean },
+): Promise<number> {
+  if (!id) {
+    process.stderr.write(
+      'Usage: loadout restore <run>|latest [--only <resource>[@<target>]] [--dry-run]\n',
+    );
+    return EXIT.usage;
+  }
+  const root = backupsRoot(context);
+  const journal = await loadJournal(root, id);
+  const runId = id === 'latest' ? (await listRuns(root))[0]!.id : id;
+  const state = await loadState(context.statePath);
+  const { backupDir, run, drivers } = newRun(context);
+  const outcome = await restoreRun(journal, state, drivers, options);
+
+  let journaled = false;
+  if (!options.dryRun) {
+    await saveState(context.statePath, outcome.state);
+    const manifest =
+      outcome.manifest === 'restored' && journal.manifest
+        ? { ...journal.manifest, before: journal.manifest.after, after: journal.manifest.before }
+        : undefined;
+    journaled = await journalRun(backupDir, `restore ${runId}`, outcome.journal, manifest);
+  }
+  print(
+    context,
+    {
+      restored: runId,
+      dryRun: options.dryRun,
+      results: outcome.results,
+      manifest: outcome.manifest,
+      run: journaled ? run : null,
+    },
+    renderRestore(runId, outcome, options.dryRun) + undoHint(journaled ? run : null),
+  );
+  return outcome.results.some((result) => result.error) ? EXIT.blocked : EXIT.ok;
 }
 
 async function runAdopt(

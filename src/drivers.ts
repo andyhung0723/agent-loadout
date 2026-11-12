@@ -10,6 +10,13 @@ import { fingerprintOf, isPlainObject, sha256, type Plain } from './values.ts';
 export type Observation =
   { state: 'missing' | 'desired' | 'recorded' } | { state: 'other'; detail: string };
 
+/** The value a unit occupies on disk; `value` is absent when nothing is there. */
+export interface Snapshot {
+  value?: unknown;
+  /** json-item only: position in the array, so a removed item is put back where it was. */
+  index?: number;
+}
+
 export interface Fingerprints {
   desired?: string;
   recorded?: string;
@@ -32,6 +39,14 @@ interface Driver {
   ): Promise<Observation>;
   put(unit: Unit, recorded: string | undefined, context: DriverContext): Promise<void>;
   remove(locator: Locator, recorded: string, context: DriverContext): Promise<void>;
+  /** json-item finds its item by `fingerprint`; other drivers read the whole location. */
+  capture(
+    locator: Locator,
+    fingerprint: string | undefined,
+    context: DriverContext,
+  ): Promise<Snapshot>;
+  /** Turn `from` (verified current) into `to`. */
+  revert(locator: Locator, from: Snapshot, to: Snapshot, context: DriverContext): Promise<void>;
 }
 
 const link: Driver = {
@@ -53,6 +68,16 @@ const link: Driver = {
   async remove({ file }) {
     await unlink(file);
   },
+  async capture({ file }) {
+    const observed = await observe(file);
+    return observed.type === 'link' ? { value: observed.to } : {};
+  },
+  async revert({ file }, from, to) {
+    if (from.value !== undefined) await unlink(file);
+    if (to.value === undefined) return;
+    await mkdir(path.dirname(file), { recursive: true });
+    await symlink(String(to.value), file);
+  },
 };
 
 const file: Driver = {
@@ -70,6 +95,15 @@ const file: Driver = {
     await backup.save(target);
     await unlink(target);
   },
+  async capture({ file: target }) {
+    if ((await observe(target)).type !== 'other') return {};
+    return { value: await readFile(target, 'utf8') };
+  },
+  async revert({ file: target }, from, to, { backup }) {
+    await backup.save(target);
+    if (to.value !== undefined) await writeAtomic(target, String(to.value));
+    else if (from.value !== undefined) await unlink(target);
+  },
 };
 
 const jsonKey: Driver = {
@@ -83,6 +117,13 @@ const jsonKey: Driver = {
   },
   async remove(locator, _recorded, { documents }) {
     await documents.jsonDelete(locator.file, locator.pointer);
+  },
+  async capture(locator, _fingerprint, { documents }) {
+    return present(await documents.jsonGet(locator.file, locator.pointer));
+  },
+  async revert(locator, _from, to, { documents }) {
+    if (to.value === undefined) await documents.jsonDelete(locator.file, locator.pointer);
+    else await documents.jsonSet(locator.file, locator.pointer, to.value);
   },
 };
 
@@ -105,8 +146,22 @@ const jsonItem: Driver = {
     const items = (await arrayAt(documents, locator)).filter(
       (item) => fingerprintOf(item) !== recorded,
     );
-    if (items.length > 0) await documents.jsonSet(locator.file, locator.pointer, items);
-    else await documents.jsonDelete(locator.file, locator.pointer);
+    await setItems(documents, locator, items);
+  },
+  async capture(locator, fingerprint, { documents }) {
+    const items = await arrayAt(documents, locator);
+    const index = fingerprint === undefined ? -1 : items.map(fingerprintOf).indexOf(fingerprint);
+    return index < 0 ? {} : { value: items[index], index };
+  },
+  async revert(locator, from, to, { documents }) {
+    const items = [...(await arrayAt(documents, locator))];
+    const index =
+      from.value === undefined ? -1 : items.map(fingerprintOf).indexOf(fingerprintOf(from.value));
+    if (index >= 0 && to.value !== undefined) items[index] = to.value;
+    else if (index >= 0) items.splice(index, 1);
+    else if (to.value !== undefined)
+      items.splice(Math.min(to.index ?? items.length, items.length), 0, to.value);
+    await setItems(documents, locator, items);
   },
 };
 
@@ -122,6 +177,13 @@ const tomlTable: Driver = {
   },
   async remove(locator, _recorded, { documents }) {
     await documents.tomlRemove(locator.file, locator.pointer);
+  },
+  async capture(locator, _fingerprint, { documents }) {
+    return present(await documents.tomlGet(locator.file, locator.pointer));
+  },
+  async revert(locator, _from, to, { documents }) {
+    if (to.value === undefined) await documents.tomlRemove(locator.file, locator.pointer);
+    else await documents.tomlUpsert(locator.file, locator.pointer, to.value as Plain);
   },
 };
 
@@ -141,6 +203,15 @@ function compare(
   if (current === desired) return { state: 'desired' };
   if (current === recorded) return { state: 'recorded' };
   return { state: 'other', detail };
+}
+
+function present(value: unknown): Snapshot {
+  return value === undefined ? {} : { value };
+}
+
+async function setItems(documents: Documents, locator: Locator, items: unknown[]): Promise<void> {
+  if (items.length > 0) await documents.jsonSet(locator.file, locator.pointer, items);
+  else await documents.jsonDelete(locator.file, locator.pointer);
 }
 
 async function arrayAt(documents: Documents, locator: Locator): Promise<unknown[]> {
