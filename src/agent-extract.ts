@@ -3,7 +3,7 @@ import { parse as parseToml } from 'smol-toml';
 import { parse as parseYaml, stringify } from 'yaml';
 import { renderAgent } from './agent-render.ts';
 import { readOrNull } from './documents.ts';
-import { ManifestError, type Manifest, type Target } from './manifest.ts';
+import { isProject, ManifestError, type Manifest, type Target } from './manifest.ts';
 import { configFiles } from './units.ts';
 import { isPlainObject, type Plain } from './values.ts';
 
@@ -64,7 +64,7 @@ export async function extractAgent(manifest: Manifest, name: string): Promise<Ex
 
 async function findAgentFiles(manifest: Manifest, name: string): Promise<Found[]> {
   const found: Found[] = [];
-  for (const target of manifest.targets) {
+  for (const target of manifest.targets.filter((candidate) => !isProject(candidate))) {
     const extension = target.tool === 'claude' ? 'md' : 'toml';
     const text = await readOrNull(path.join(configFiles.agents(target), `${name}.${extension}`));
     if (text !== null) found.push({ target, text });

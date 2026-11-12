@@ -169,6 +169,41 @@ Selectors: `*`, `<target>`, `tag:<tag>`, `tool:<tool>`, prefix `!` to exclude. `
 resource in the catalog but off everywhere. A leading `~/` in `path`, `dir` and `command` is
 expanded.
 
+### Project targets
+
+A target can be a repository instead of a profile folder:
+
+```toml
+[targets.web]
+tool = "claude"
+dir = "~/Workspace/web"
+scope = "project"
+visibility = "local"       # default; or "shared"
+profile = "claude-work"    # local Claude only: whose .claude.json stores its MCP servers
+```
+
+| Kind                        | Claude · local                               | Claude · shared         | Codex · local    | Codex · shared                             |
+| --------------------------- | -------------------------------------------- | ----------------------- | ---------------- | ------------------------------------------ |
+| instructions                | `CLAUDE.local.md` (link)                     | `CLAUDE.md` (copy)      | –                | `AGENTS.md` (copy)                         |
+| skill                       | `.claude/skills/<name>` (link)               | same path (copy)        | `.agents/skills` | `.agents/skills` (copy)                    |
+| command                     | `.claude/commands/<name>.md` (link)          | same path (copy)        | –                | –                                          |
+| agent                       | `.claude/agents/<name>.md`                   | same path               | –                | –                                          |
+| hook / plugin / marketplace | `.claude/settings.local.json`                | `.claude/settings.json` | –                | `.codex/hooks.json` · `.codex/config.toml` |
+| mcp                         | profile's `.claude.json` → `projects[<dir>]` | `.mcp.json`             | –                | `.codex/config.toml`                       |
+
+- **local** writes only what stays on this machine. Links and generated files inside the
+  repository are added to `.git/info/exclude` (owned lines, removed again with the resource), so
+  `git status` stays clean. Codex has no personal layer inside a repository, so only skills apply.
+- **shared** writes the files the repository commits, for the whole team. Skills, commands and
+  instructions are copied (a link into your home folder would dangle for everyone else) and
+  compared by content; a copy a teammate edited is a conflict. Values must not contain resolved
+  secrets: write `$${env:NAME}` to emit `${NAME}`, which Claude Code expands itself. `restore`
+  doesn't undo copies; use git.
+- `*` and `tool:` select profiles only. A project target is selected by name or by a tag you give
+  it, so adding one never pulls every `["*"]` resource into the repository.
+- Codex loads a repository's `.codex/` layer only once you trust the project. Cells marked `–`
+  have no documented location and are unsupported rather than guessed.
+
 ### Agents
 
 One neutral Markdown source renders to both formats. `name`/`description` are shared, other

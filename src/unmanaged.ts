@@ -1,5 +1,5 @@
 import { scanTarget } from './importer.ts';
-import { configKey, type Kind, type Manifest, type Resource } from './manifest.ts';
+import { configKey, isProject, type Kind, type Manifest, type Resource } from './manifest.ts';
 import { collapseHome } from './paths.ts';
 import type { SecretResolver } from './secrets.ts';
 import { scanSharedCodexSkills } from './shared.ts';
@@ -27,7 +27,8 @@ export async function findUnmanaged(
   const managed = new Set((await desiredUnits(manifest, secrets)).map(signature));
   const items: UnmanagedItem[] = [];
 
-  for (const target of manifest.targets) {
+  // Project targets aren't scanned yet: a repository's .claude/ is mostly the team's, not ours.
+  for (const target of manifest.targets.filter((candidate) => !isProject(candidate))) {
     const scan = await scanTarget(target, home);
     const present: Resource[] = scan.definitions.map((definition) =>
       withAbsoluteCommand({ ...definition, to: [target.name] } as Resource, home),

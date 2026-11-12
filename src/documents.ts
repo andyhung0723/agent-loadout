@@ -1,4 +1,14 @@
-import { chmod, copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  cp,
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { removeTomlTable, upsertTomlTable } from './toml-text.ts';
@@ -193,7 +203,11 @@ export class Backup {
       const dest = path.join(this.#root, file);
       await mkdir(this.#root, { recursive: true, mode: 0o700 });
       await mkdir(path.dirname(dest), { recursive: true });
-      await copyFile(file, dest);
+      if ((await lstat(file)).isDirectory()) {
+        await cp(file, dest, { recursive: true, verbatimSymlinks: true });
+      } else {
+        await copyFile(file, dest);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }

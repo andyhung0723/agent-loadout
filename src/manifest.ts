@@ -27,8 +27,21 @@ export interface Target {
   tool: Tool;
   dir: string;
   tags: string[];
-  /** Claude only: where this profile's `.claude.json` (user MCP servers, …) lives. */
+  /**
+   * Claude only: the `.claude.json` holding this target's MCP servers. For a local project target
+   * it is the one of its `profile` (servers go under `projects[<dir>]`).
+   */
   claudeJson?: string;
+  /** Set for a repository: `dir` is the project root and paths follow the project layout. */
+  scope?: 'project';
+  /** Project targets: `local` (default) writes only files kept out of git; `shared` the committed ones. */
+  visibility?: 'local' | 'shared';
+  /** Local Claude project targets: the user target whose `.claude.json` stores local MCP servers. */
+  profile?: string;
+}
+
+export function isProject(target: Target): boolean {
+  return target.scope === 'project';
 }
 
 interface ResourceBase {
@@ -191,6 +204,8 @@ export function parseManifest(text: string, home?: string, options: ParseOptions
     });
   }
 
+  linkProfiles(targets);
+
   const resources: Resource[] = [];
   const origins = new Map<string, string>();
   for (const document of documents) {
@@ -323,11 +338,30 @@ function parseTargets(table: Reader, home?: string): Target[] {
       throw new ManifestError(`${entry.where('tool')} must be one of: ${TOOLS.join(', ')}`);
     }
     const dir = expandHome(entry.string('dir'), home);
+    const scope = entry.optString('scope') ?? 'user';
+    if (scope !== 'user' && scope !== 'project') {
+      throw new ManifestError(`${entry.where('scope')} must be "user" or "project"`);
+    }
+    const base = { name, tool: tool as Tool, dir, tags: entry.optStringArray('tags') ?? [] };
+
+    if (scope === 'project') {
+      const visibility = entry.optString('visibility') ?? 'local';
+      if (visibility !== 'local' && visibility !== 'shared') {
+        throw new ManifestError(`${entry.where('visibility')} must be "local" or "shared"`);
+      }
+      const profile = entry.optString('profile');
+      if (profile !== undefined && (tool !== 'claude' || visibility !== 'local')) {
+        throw new ManifestError(
+          `${entry.where('profile')} only applies to local Claude project targets`,
+        );
+      }
+      return { ...base, scope: 'project' as const, visibility, ...(profile ? { profile } : {}) };
+    }
+    for (const key of ['visibility', 'profile']) {
+      if (entry.has(key)) throw new ManifestError(`${entry.where(key)} needs scope = "project"`);
+    }
     return {
-      name,
-      tool: tool as Tool,
-      dir,
-      tags: entry.optStringArray('tags') ?? [],
+      ...base,
       ...(tool === 'claude'
         ? {
             claudeJson: entry.has('claude_json')
@@ -337,6 +371,20 @@ function parseTargets(table: Reader, home?: string): Target[] {
         : {}),
     };
   });
+}
+
+/** A local Claude project keeps its MCP servers in its profile's `.claude.json`. */
+function linkProfiles(targets: Target[]): void {
+  for (const target of targets) {
+    if (!target.profile) continue;
+    const profile = targets.find((candidate) => candidate.name === target.profile);
+    if (!profile || isProject(profile) || profile.tool !== 'claude') {
+      throw new ManifestError(
+        `targets.${target.name}.profile: "${target.profile}" must name a user-scope Claude target`,
+      );
+    }
+    target.claudeJson = profile.claudeJson;
+  }
 }
 
 /**

@@ -1,15 +1,4 @@
-import { createHash } from 'node:crypto';
-import {
-  cp,
-  lstat,
-  mkdir,
-  readdir,
-  readFile,
-  readlink,
-  rename,
-  rm,
-  symlink,
-} from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { writeAtomic } from './documents.ts';
 import type { ManifestChange } from './journal.ts';
@@ -20,6 +9,7 @@ import { expandHome } from './paths.ts';
 import type { State } from './state.ts';
 import { nextSelectors } from './toggle.ts';
 import { tomlValue } from './toml-text.ts';
+import { treeHash } from './tree.ts';
 import { configFiles, unitKey } from './units.ts';
 
 type AdoptableKind = 'skill' | 'command';
@@ -182,29 +172,4 @@ async function manifestChangeFor(
 function collapse(file: string, home?: string): string {
   if (!home) return file;
   return file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file;
-}
-
-async function treeHash(root: string): Promise<string> {
-  const hash = createHash('sha256');
-  const stats = await lstat(root);
-  if (stats.isFile()) return hash.update(await readFile(root)).digest('hex');
-
-  const walk = async (dir: string, prefix: string): Promise<void> => {
-    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      const relative = `${prefix}/${entry.name}`;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        hash.update(`d:${relative}\n`);
-        await walk(full, relative);
-      } else if (entry.isFile()) {
-        hash.update(`f:${relative}\n`).update(await readFile(full));
-      } else if (entry.isSymbolicLink()) {
-        hash.update(`l:${relative}->${await readlink(full)}\n`);
-      }
-    }
-  };
-  await walk(root, '');
-  return hash.digest('hex');
 }

@@ -106,7 +106,7 @@ to = [
         { resource: 'x', target: 'codex', enabled: true },
         box.home,
       ),
-      /not supported on codex/,
+      /command:x has no place on codex \(codex profile\)/,
     );
   });
 });

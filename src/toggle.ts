@@ -33,8 +33,10 @@ export async function toggleInManifest(
   const resource = findResource(manifest, request.resource);
   const target = findTarget(manifest, request.target);
 
-  if (!supports(resource.kind, target.tool)) {
-    throw new ManifestError(`${resourceId(resource)} is not supported on ${target.tool} targets`);
+  if (!supports(resource.kind, target)) {
+    throw new ManifestError(
+      `${resourceId(resource)} has no place on ${target.name} (${describeTarget(target)})`,
+    );
   }
 
   const shared = sharedEntry(resource, target, await scanSharedCodexSkills(manifest));
@@ -114,6 +116,12 @@ export function findResource(manifest: Manifest, query: string): Resource {
     throw new ManifestError(`"${query}" is ambiguous: ${ids}`);
   }
   throw new ManifestError(`unknown resource "${query}"`);
+}
+
+function describeTarget(target: Target): string {
+  return target.scope === 'project'
+    ? `${target.visibility} ${target.tool} project`
+    : `${target.tool} profile`;
 }
 
 export function findTarget(manifest: Manifest, name: string): Target {

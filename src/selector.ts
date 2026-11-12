@@ -1,4 +1,4 @@
-import { ManifestError, type Target } from './manifest.ts';
+import { isProject, ManifestError, type Target } from './manifest.ts';
 
 const EXCLUDE_PREFIX = '!';
 
@@ -32,11 +32,17 @@ export function assertSelectorsResolve(
 
 export function compressSelectors(selected: Target[], all: Target[]): string[] {
   const selectedNames = new Set(selected.map((target) => target.name));
-  if (all.every((target) => selectedNames.has(target.name))) return ['*'];
+  const profiles = all.filter((target) => !isProject(target));
+  if (
+    selected.every((target) => !isProject(target)) &&
+    profiles.every((target) => selectedNames.has(target.name))
+  ) {
+    return ['*'];
+  }
 
-  const tools = new Set(all.map((target) => target.tool));
+  const tools = new Set(profiles.map((target) => target.tool));
   for (const tool of tools) {
-    const ofTool = all.filter((target) => target.tool === tool);
+    const ofTool = profiles.filter((target) => target.tool === tool);
     const exact =
       ofTool.length === selected.length && ofTool.every((target) => selectedNames.has(target.name));
     if (exact) return [`tool:${tool}`];
@@ -48,9 +54,15 @@ function isPatternSelector(selector: string): boolean {
   return selector === '*' || selector.startsWith('tag:') || selector.startsWith('tool:');
 }
 
+/**
+ * `*` and `tool:` mean every profile, not every repository: a project target is picked only by
+ * name or a tag it carries, so adding one doesn't pull every `["*"]` resource into the repo.
+ */
 function matches(selector: string, target: Target): boolean {
-  if (selector === '*') return true;
+  if (selector === '*') return !isProject(target);
   if (selector.startsWith('tag:')) return target.tags.includes(selector.slice('tag:'.length));
-  if (selector.startsWith('tool:')) return target.tool === selector.slice('tool:'.length);
+  if (selector.startsWith('tool:')) {
+    return !isProject(target) && target.tool === selector.slice('tool:'.length);
+  }
   return target.name === selector;
 }

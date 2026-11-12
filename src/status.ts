@@ -6,6 +6,7 @@ import {
   type Resource,
   type Target,
   type Tool,
+  isProject,
 } from './manifest.ts';
 import type { Action, Plan, PlanEntry } from './planner.ts';
 import { selectTargets } from './selector.ts';
@@ -91,7 +92,7 @@ export function toStatusMatrix(
     const selected = new Set(selectTargets(resource.to, manifest.targets).map((t) => t.name));
     const cells: Record<string, CellState> = Object.fromEntries(
       manifest.targets.map((target): [string, CellState] => {
-        if (!supports(resource.kind, target.tool)) return [target.name, 'n/a'];
+        if (!supports(resource.kind, target)) return [target.name, 'n/a'];
         const shared = sharedEntry(resource, target, sharedSkills);
         if (!selected.has(target.name)) return [target.name, shared ? 'inherited' : 'off'];
         if (shared) {
@@ -125,7 +126,7 @@ export function sharedEntry(
   target: Target,
   sharedSkills: SharedSkills,
 ): string | undefined {
-  if (resource.kind !== 'skill' || target.tool !== 'codex') return undefined;
+  if (resource.kind !== 'skill' || target.tool !== 'codex' || isProject(target)) return undefined;
   return sharedSkills.get(configKey(resource));
 }
 

@@ -41,7 +41,8 @@ manifest.ts ─▶ units.ts ─▶ planner.ts ─▶ apply.ts
 | `manifest.ts`                           | Parse + validate `loadout.toml` into `Target[]` and `Resource[]`          |
 | `selector.ts`                           | `*`, name, `tag:`, `tool:`, `!exclude` → targets                          |
 | `units.ts`                              | Translate a resource for one target into units (locator + value)          |
-| `drivers.ts`                            | `link`, `file`, `json-key`, `json-item`, `toml-table`: inspect/put/remove |
+| `drivers.ts`                            | `link`, `copy`, `file`, `json-key`, `json-item`, `toml-table`, `line`     |
+| `layout.ts`                             | Where each kind goes per target: profile, local or shared project         |
 | `documents.ts`                          | Cached JSON/TOML documents, optimistic flush, backups, atomic writes      |
 | `toml-text.ts`                          | Block-level TOML surgery that keeps the rest of the file byte-identical   |
 | `planner.ts` / `apply.ts`               | Actions (`create`, `replace`, `adopt`, `remove`, `forget`, …) and effects |
@@ -92,6 +93,10 @@ Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts
 8. **Shared layers are facts, not targets.** Codex loads `~/.agents/skills` for every profile;
    `status` reports such skills as `inherited` and `toggle` refuses per-profile "off" for them.
    Never present an inherited cell as "off".
+9. **Project targets never leak.** `*` / `tool:` select profiles only. Local project targets
+   write only files kept out of git (links are added to `.git/info/exclude` as owned `line`
+   units); shared ones copy instead of linking and refuse resolved secrets (`committed` units).
+   Paths come from `layoutOf`; a kind with no documented path is unsupported, never guessed.
 
 ## Conventions
 
@@ -100,5 +105,5 @@ Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts
   `.claude`, `.claude-work`, `.codex` targets). Never touch the real `~/.claude*` / `~/.codex*`
   from tests; CLI tests run the binary with `HOME` set to the sandbox.
 - Exit codes: 0 ok, 2 blocked (conflict/unresolved), 64 usage, 65 manifest error, 75 locked.
-- `--json` output is consumed by the herdr mod (`herdr-customized/herdr-loadout`); treat its shape
+- `--json` output is consumed by the herdr mod (`herdr-mods/herdr-loadout`); treat its shape
   as an interface: add fields, don't rename or remove them.

@@ -15,10 +15,13 @@ import {
 } from './manifest.ts';
 import { exists } from './observe.ts';
 import { selectTargets } from './selector.ts';
-import { describeRef, interpolate, type SecretResolver } from './secrets.ts';
+import { layoutOf, supports, type Layout } from './layout.ts';
+import { describeRef, findRefs, interpolate, type SecretResolver } from './secrets.ts';
+import { treeHash } from './tree.ts';
 import { fingerprintOf, sha256, withoutUndefined, type Plain } from './values.ts';
 
-export type DriverName = 'link' | 'file' | 'json-key' | 'json-item' | 'toml-table';
+export type DriverName =
+  'link' | 'copy' | 'file' | 'json-key' | 'json-item' | 'toml-table' | 'line';
 
 export interface Locator {
   driver: DriverName;
@@ -36,14 +39,7 @@ export interface Unit extends Locator {
   observe?: boolean;
 }
 
-const UNSUPPORTED: Record<Tool, readonly Kind[]> = {
-  claude: [],
-  codex: ['command', 'marketplace'],
-};
-
-export function supports(kind: Kind, tool: Tool): boolean {
-  return !UNSUPPORTED[tool].includes(kind);
-}
+export { supports } from './layout.ts';
 
 export function unitKey(locator: Locator, resource: string): string {
   const base = `${locator.driver}:${locator.file}`;
@@ -51,10 +47,14 @@ export function unitKey(locator: Locator, resource: string): string {
   return locator.driver === 'json-item' ? `${withPointer}@${resource}` : withPointer;
 }
 
+/** Units several resources may need identically (one exclude line), owned by the first. */
+const SHAREABLE_DRIVERS: ReadonlySet<DriverName> = new Set(['line']);
+
 export function describeLocation(locator: Locator): string {
   return locator.pointer.length ? `${locator.file} ${locator.pointer.join('.')}` : locator.file;
 }
 
+/** Paths inside a user-scope profile folder (import, adopt, agent extract); see `layoutOf`. */
 export const configFiles = {
   claudeSettings: (target: Target) => path.join(target.dir, 'settings.json'),
   claudeState: (target: Target) => target.claudeJson ?? path.join(target.dir, '.claude.json'),
@@ -69,16 +69,24 @@ export const configFiles = {
 
 const VALUE_DRIVERS: ReadonlySet<DriverName> = new Set(['json-key', 'json-item', 'toml-table']);
 
+interface RawUnit extends Unit {
+  /** Its file is committed to a repository: resolved secrets must not go in. */
+  committed?: boolean;
+}
+
 export async function desiredUnits(manifest: Manifest, secrets: SecretResolver): Promise<Unit[]> {
   const byKey = new Map<string, Unit>();
   for (const resource of manifest.resources) {
     const targets = selectTargets(resource.to, manifest.targets).filter((target) =>
-      supports(resource.kind, target.tool),
+      supports(resource.kind, target),
     );
     for (const target of targets) {
       for (const raw of await unitsFor(resource, target)) {
         const unit = await resolveSecrets(raw, secrets);
         const clash = byKey.get(unit.key);
+        if (clash && SHAREABLE_DRIVERS.has(unit.driver) && clash.fingerprint === unit.fingerprint) {
+          continue;
+        }
         if (clash) {
           throw new ManifestError(
             `${unit.resource} and ${clash.resource} both claim ${describeLocation(unit)} on ${target.name}`,
@@ -91,8 +99,16 @@ export async function desiredUnits(manifest: Manifest, secrets: SecretResolver):
   return [...byKey.values()];
 }
 
-async function resolveSecrets(unit: Unit, secrets: SecretResolver): Promise<Unit> {
+async function resolveSecrets(raw: RawUnit, secrets: SecretResolver): Promise<Unit> {
+  const { committed, ...unit } = raw;
   if (!VALUE_DRIVERS.has(unit.driver) || unit.problem) return unit;
+  if (committed && findRefs(unit.value).length > 0) {
+    return {
+      ...unit,
+      problem:
+        'secrets would be written into a committed file; use "$${env:NAME}" so the tool expands ${NAME} itself',
+    };
+  }
   const { value, missing } = await interpolate(unit.value, secrets);
   if (missing.length > 0) {
     return { ...unit, problem: `unresolved secret ${missing.map(describeRef).join(', ')}` };
@@ -100,9 +116,15 @@ async function resolveSecrets(unit: Unit, secrets: SecretResolver): Promise<Unit
   return { ...unit, value, fingerprint: fingerprintOf(value) };
 }
 
-async function unitsFor(resource: Resource, target: Target): Promise<Unit[]> {
+async function unitsFor(resource: Resource, target: Target): Promise<RawUnit[]> {
   const id = resourceId(resource);
-  const make = (locator: Locator, value: unknown, fingerprint: string, problem?: string): Unit => ({
+  const layout = layoutOf(target);
+  const make = (
+    locator: Locator,
+    value: unknown,
+    fingerprint: string,
+    problem?: string,
+  ): RawUnit => ({
     ...locator,
     key: unitKey(locator, id),
     resource: id,
@@ -111,30 +133,41 @@ async function unitsFor(resource: Resource, target: Target): Promise<Unit[]> {
     fingerprint,
     ...(problem ? { problem } : {}),
     ...(resource.mode === 'observe' ? { observe: true } : {}),
+    ...(layout.committed ? { committed: true } : {}),
   });
   const valueUnit = (locator: Locator, value: unknown) =>
     make(locator, value, fingerprintOf(value));
+  /** Keeps a file loadout puts in a repository out of `git status`. */
+  const excluded = (file: string, units: RawUnit[]): RawUnit[] => {
+    if (!layout.gitExclude) return units;
+    const line = '/' + path.relative(target.dir, file).split(path.sep).join('/');
+    return [
+      ...units,
+      make({ driver: 'line', file: layout.gitExclude, pointer: [line] }, line, sha256(line)),
+    ];
+  };
 
   switch (resource.kind) {
     case 'instructions':
     case 'skill':
     case 'command': {
-      const dest = linkDestination(resource.kind, configKey(resource), target);
-      const problem = (await exists(resource.source)) ? undefined : 'source does not exist';
-      return [
-        make(
-          { driver: 'link', file: dest, pointer: [] },
-          resource.source,
-          resource.source,
-          problem,
-        ),
-      ];
+      const dest = linkDestination(resource.kind, configKey(resource), layout);
+      if (!(await exists(resource.source))) {
+        return [make({ driver: 'link', file: dest, pointer: [] }, '', '', 'source does not exist')];
+      }
+      if (layout.copy) {
+        const hash = await treeHash(resource.source, { follow: true });
+        return [make({ driver: 'copy', file: dest, pointer: [] }, resource.source, hash)];
+      }
+      return excluded(dest, [
+        make({ driver: 'link', file: dest, pointer: [] }, resource.source, resource.source),
+      ]);
     }
     case 'agent': {
       const extension = target.tool === 'claude' ? 'md' : 'toml';
       const locator: Locator = {
         driver: 'file',
-        file: path.join(configFiles.agents(target), `${configKey(resource)}.${extension}`),
+        file: path.join(layout.agents!, `${configKey(resource)}.${extension}`),
         pointer: [],
       };
       try {
@@ -143,7 +176,7 @@ async function unitsFor(resource: Resource, target: Target): Promise<Unit[]> {
           configKey(resource),
           target.tool,
         );
-        return [make(locator, content, sha256(content))];
+        return excluded(locator.file, [make(locator, content, sha256(content))]);
       } catch (error) {
         const problem =
           (error as NodeJS.ErrnoException).code === 'ENOENT'
@@ -153,81 +186,83 @@ async function unitsFor(resource: Resource, target: Target): Promise<Unit[]> {
       }
     }
     case 'hook': {
-      const file =
-        target.tool === 'claude'
-          ? configFiles.claudeSettings(target)
-          : configFiles.codexHooks(target);
+      const file = target.tool === 'claude' ? layout.claudeSettings! : layout.codexHooks!;
       const group = hookGroup(resource, target.tool);
-      return resource.events.map((event) =>
-        valueUnit({ driver: 'json-item', file, pointer: ['hooks', event] }, group),
+      return excluded(
+        file,
+        resource.events.map((event) =>
+          valueUnit({ driver: 'json-item', file, pointer: ['hooks', event] }, group),
+        ),
       );
     }
     case 'mcp':
-      return target.tool === 'claude'
-        ? [
-            valueUnit(
-              {
-                driver: 'json-key',
-                file: configFiles.claudeState(target),
-                pointer: ['mcpServers', configKey(resource)],
-              },
-              claudeMcp(resource),
-            ),
-          ]
-        : [
-            valueUnit(
-              {
-                driver: 'toml-table',
-                file: configFiles.codexConfig(target),
-                pointer: ['mcp_servers', configKey(resource)],
-              },
-              codexMcp(resource),
-            ),
-          ];
+      if (target.tool === 'claude') {
+        const { file, pointer } = layout.claudeMcp!;
+        return [
+          valueUnit(
+            { driver: 'json-key', file, pointer: [...pointer, configKey(resource)] },
+            claudeMcp(resource),
+          ),
+        ];
+      }
+      return [
+        valueUnit(
+          {
+            driver: 'toml-table',
+            file: layout.codexConfig!,
+            pointer: ['mcp_servers', configKey(resource)],
+          },
+          codexMcp(resource),
+        ),
+      ];
     case 'plugin':
       return target.tool === 'claude'
-        ? [
+        ? excluded(layout.claudeSettings!, [
             valueUnit(
               {
                 driver: 'json-key',
-                file: configFiles.claudeSettings(target),
+                file: layout.claudeSettings!,
                 pointer: ['enabledPlugins', configKey(resource)],
               },
               resource.enabled,
             ),
-          ]
+          ])
         : [
             valueUnit(
               {
                 driver: 'toml-table',
-                file: configFiles.codexConfig(target),
+                file: layout.codexConfig!,
                 pointer: ['plugins', configKey(resource)],
               },
               { enabled: resource.enabled },
             ),
           ];
     case 'marketplace':
-      return [
+      return excluded(layout.claudeSettings!, [
         valueUnit(
           {
             driver: 'json-key',
-            file: configFiles.claudeSettings(target),
+            file: layout.claudeSettings!,
             pointer: ['extraKnownMarketplaces', configKey(resource)],
           },
           resource.config,
         ),
-      ];
+      ]);
   }
 }
 
-function linkDestination(kind: 'instructions' | 'skill' | 'command', name: string, target: Target) {
+function linkDestination(
+  kind: 'instructions' | 'skill' | 'command',
+  name: string,
+  layout: Layout,
+): string {
   switch (kind) {
     case 'instructions':
-      return configFiles.instructions(target);
+      return layout.instructions!;
     case 'skill':
-      return path.join(configFiles.skills(target), name);
+      return path.join(layout.skills!, name);
     case 'command':
-      return path.join(configFiles.commands(target), `${name}.md`);
+      return path.join(layout.commands!, `${name}.md`);
   }
 }
 
