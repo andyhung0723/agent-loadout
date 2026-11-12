@@ -124,22 +124,55 @@ to = ["claude", "codex"]
     assert.equal(await box.read('.codex/config.toml'), '[mcp_servers.zhtw]\ncommand = "other"\n');
   });
 
-  test('aborts the write when the file changes between plan and apply', async () => {
+  async function planThenEdit(body: string, edit: () => Promise<void>) {
     const { buildPlan } = await import('../src/planner.ts');
     const { applyPlan } = await import('../src/apply.ts');
-    const { Backup, Documents } = await import('../src/documents.ts');
     const { emptyState } = await import('../src/state.ts');
-
-    await box.write('.claude/.claude.json', '{}');
     const context = box.context();
-    const manifest = box.manifest(MCP.replace('["claude", "codex"]', '["claude"]'));
-    const plan = await buildPlan(manifest, emptyState(), context);
-    await box.write('.claude/.claude.json', '{"numStartups": 4}');
-    const { results, state } = await applyPlan(plan, emptyState(), context);
+    const plan = await buildPlan(box.manifest(body), emptyState(), context);
+    await edit();
+    return applyPlan(plan, emptyState(), context);
+  }
 
-    assert.match(results[0]!.error ?? '', /changed on disk/);
+  test('an unrelated change between plan and apply is rebased, not lost', async () => {
+    await box.write('.claude/.claude.json', '{"numStartups": 3}');
+    const { results, state } = await planThenEdit(
+      MCP.replace('["claude", "codex"]', '["claude"]'),
+      () => box.write('.claude/.claude.json', '{"numStartups": 4, "tipsHistory": {}}'),
+    );
+
+    assert.equal(results[0]!.error, undefined);
+    assert.equal(Object.keys(state.units).length, 1);
+    const written = await box.readJson('.claude/.claude.json');
+    assert.equal(written.numStartups, 4);
+    assert.deepEqual(written.tipsHistory, {});
+    assert.ok(written.mcpServers.zhtw);
+  });
+
+  test('a change to a key the plan depends on aborts that file', async () => {
+    await box.write('.claude/.claude.json', '{}');
+    const racing = '{"mcpServers": {"zhtw": {"command": "theirs"}}}';
+    const { results, state } = await planThenEdit(
+      MCP.replace('["claude", "codex"]', '["claude"]'),
+      () => box.write('.claude/.claude.json', racing),
+    );
+
+    assert.match(results[0]!.error ?? '', /mcpServers\.zhtw changed on disk/);
     assert.deepEqual(state.units, {});
-    assert.equal(await box.read('.claude/.claude.json'), '{"numStartups": 4}');
+    assert.equal(await box.read('.claude/.claude.json'), racing);
+  });
+
+  test('config.toml edits are replayed onto the new text, keeping the other change verbatim', async () => {
+    await box.write('.codex/config.toml', 'model = "gpt"\n');
+    const { results } = await planThenEdit(MCP.replace('["claude", "codex"]', '["codex"]'), () =>
+      box.write('.codex/config.toml', '# added by codex\nmodel = "gpt"\n\n[tui]\nx = 1\n'),
+    );
+
+    assert.equal(results[0]!.error, undefined);
+    assert.equal(
+      await box.read('.codex/config.toml'),
+      `# added by codex\nmodel = "gpt"\n\n[tui]\nx = 1\n\n[mcp_servers.zhtw]\ncommand = "${box.home}/.local/bin/zhtw-mcp"\nenv = { ZHTW_NO_NETWORK = "1" }\n`,
+    );
   });
 });
 

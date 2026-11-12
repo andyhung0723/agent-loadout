@@ -59,8 +59,9 @@ Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts
 3. **Surgical edits.** JSON changes only owned keys/items; TOML is edited per table block;
    manifest edits (`toggle`, `adopt`, `agent extract --add`) rewrite one entry or append one.
    Comments and formatting elsewhere must survive (tests assert byte equality).
-4. **Optimistic writes + backups.** Re-read a file before writing; abort that file if it changed
-   since it was read. Back up anything overwritten. Preserve file modes.
+4. **Optimistic writes + backups.** Re-read a file before writing. If it changed since it was read,
+   rebase only when every pointer the plan read or edited is unchanged (replay the edits onto the
+   new content); otherwise abort that file. Back up anything overwritten. Preserve file modes.
 5. **Codex hook trust is index-keyed.** New hook groups are appended; changed ones are replaced in
    place. Never reorder hook arrays, never write `[hooks.state]`.
 6. **Writers hold the lock.** `apply`, `toggle`, `adopt`, `import --write`, `agent extract --add`

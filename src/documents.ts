@@ -2,12 +2,24 @@ import { chmod, copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:
 import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { removeTomlTable, upsertTomlTable } from './toml-text.ts';
-import { isPlainObject, type Plain } from './values.ts';
+import { isPlainObject, stableStringify, type Plain } from './values.ts';
+
+type Format = 'json' | 'toml';
+
+type Edit =
+  | { op: 'json-set'; pointer: string[]; value: unknown }
+  | { op: 'json-delete'; pointer: string[] }
+  | { op: 'toml-upsert'; pointer: string[]; table: Plain }
+  | { op: 'toml-remove'; pointer: string[] };
 
 interface LoadedDocument {
   original: string | null;
   text: string;
   dirty: boolean;
+  format?: Format;
+  /** Pointers whose value the plan depends on: everything read or edited. */
+  touched: Map<string, string[]>;
+  edits: Edit[];
 }
 
 export class Documents {
@@ -15,54 +27,63 @@ export class Documents {
   readonly #json = new Map<string, Plain>();
 
   async jsonGet(file: string, pointer: string[]): Promise<unknown> {
-    return getIn(await this.#jsonData(file), pointer);
+    const data = await this.#jsonData(file);
+    touch(this.#loaded.get(file)!, pointer);
+    return getIn(data, pointer);
   }
 
   async jsonSet(file: string, pointer: string[], value: unknown): Promise<void> {
     setIn(await this.#jsonData(file), pointer, value);
-    this.#loaded.get(file)!.dirty = true;
+    this.#edit(file, { op: 'json-set', pointer, value });
   }
 
   async jsonDelete(file: string, pointer: string[]): Promise<void> {
     deleteIn(await this.#jsonData(file), pointer);
-    this.#loaded.get(file)!.dirty = true;
+    this.#edit(file, { op: 'json-delete', pointer });
   }
 
   async tomlGet(file: string, pointer: string[]): Promise<unknown> {
-    const document = await this.#load(file);
-    try {
-      return getIn(parseToml(document.text), pointer);
-    } catch (error) {
-      throw new Error(`${file}: invalid TOML (${(error as Error).message})`);
-    }
+    const document = await this.#load(file, 'toml');
+    touch(document, pointer);
+    return getIn(parseTomlText(file, document.text), pointer);
   }
 
   async tomlUpsert(file: string, pointer: string[], table: Plain): Promise<void> {
-    const document = await this.#load(file);
+    const document = await this.#load(file, 'toml');
     document.text = upsertTomlTable(document.text, pointer, table);
-    document.dirty = true;
+    this.#edit(file, { op: 'toml-upsert', pointer, table });
   }
 
   async tomlRemove(file: string, pointer: string[]): Promise<void> {
-    const document = await this.#load(file);
+    const document = await this.#load(file, 'toml');
     document.text = removeTomlTable(document.text, pointer);
-    document.dirty = true;
+    this.#edit(file, { op: 'toml-remove', pointer });
   }
 
+  /**
+   * Writes every edited file. A file another process changed since it was read is rebased: if
+   * none of the values this plan read or edits moved, the edits are replayed onto the new
+   * content (a running Claude session bumping `numStartups` doesn't block an apply); otherwise
+   * the file is skipped and the moved key is named.
+   */
   async flush(backup: Backup): Promise<Map<string, string>> {
     const failures = new Map<string, string>();
     for (const [file, document] of this.#loaded) {
       if (!document.dirty) continue;
       try {
-        if ((await readOrNull(file)) !== document.original) {
-          throw new Error('changed on disk since it was read — re-run plan');
-        }
-        const json = this.#json.get(file);
-        const text = json ? JSON.stringify(json, null, 2) + '\n' : document.text;
+        const current = await readOrNull(file);
+        const text =
+          current === document.original
+            ? this.#render(file, document)
+            : rebase(file, document, current);
         await backup.save(file);
         await writeAtomic(file, text);
         document.original = text;
+        document.text = text;
         document.dirty = false;
+        document.edits = [];
+        document.touched.clear();
+        this.#json.delete(file);
       } catch (error) {
         failures.set(file, (error as Error).message);
       }
@@ -70,31 +91,90 @@ export class Documents {
     return failures;
   }
 
-  async #load(file: string): Promise<LoadedDocument> {
+  #render(file: string, document: LoadedDocument): string {
+    const json = this.#json.get(file);
+    return json ? renderJson(json) : document.text;
+  }
+
+  #edit(file: string, edit: Edit): void {
+    const document = this.#loaded.get(file)!;
+    touch(document, edit.pointer);
+    document.edits.push(edit);
+    document.dirty = true;
+  }
+
+  async #load(file: string, format: Format): Promise<LoadedDocument> {
     let document = this.#loaded.get(file);
     if (!document) {
       const original = await readOrNull(file);
-      document = { original, text: original ?? '', dirty: false };
+      document = { original, text: original ?? '', dirty: false, touched: new Map(), edits: [] };
       this.#loaded.set(file, document);
     }
+    document.format ??= format;
     return document;
   }
 
   async #jsonData(file: string): Promise<Plain> {
     const cached = this.#json.get(file);
     if (cached) return cached;
-    const document = await this.#load(file);
-    let data: unknown = {};
-    if (document.text.trim() !== '') {
-      try {
-        data = JSON.parse(document.text);
-      } catch (error) {
-        throw new Error(`${file}: invalid JSON (${(error as Error).message})`);
-      }
-    }
-    if (!isPlainObject(data)) throw new Error(`${file}: top level must be a JSON object`);
+    const document = await this.#load(file, 'json');
+    const data = parseJsonText(file, document.text);
     this.#json.set(file, data);
     return data;
+  }
+}
+
+function touch(document: LoadedDocument, pointer: string[]): void {
+  document.touched.set(JSON.stringify(pointer), pointer);
+}
+
+function rebase(file: string, document: LoadedDocument, current: string | null): string {
+  const parse = document.format === 'toml' ? parseTomlText : parseJsonText;
+  const before = parse(file, document.original ?? '');
+  const after = parse(file, current ?? '');
+  for (const pointer of document.touched.values()) {
+    if (stableStringify(getIn(before, pointer)) !== stableStringify(getIn(after, pointer))) {
+      throw new Error(`${pointer.join('.')} changed on disk since it was read — re-run plan`);
+    }
+  }
+
+  if (document.format === 'toml') {
+    return document.edits.reduce(
+      (text, edit) =>
+        edit.op === 'toml-upsert'
+          ? upsertTomlTable(text, edit.pointer, edit.table)
+          : removeTomlTable(text, edit.pointer),
+      current ?? '',
+    );
+  }
+  for (const edit of document.edits) {
+    if (edit.op === 'json-set') setIn(after, edit.pointer, edit.value);
+    else deleteIn(after, edit.pointer);
+  }
+  return renderJson(after);
+}
+
+function renderJson(data: Plain): string {
+  return JSON.stringify(data, null, 2) + '\n';
+}
+
+function parseJsonText(file: string, text: string): Plain {
+  if (text.trim() === '') return {};
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${file}: invalid JSON (${(error as Error).message})`);
+  }
+  if (!isPlainObject(data)) throw new Error(`${file}: top level must be a JSON object`);
+  return data;
+}
+
+function parseTomlText(file: string, text: string): Plain {
+  try {
+    return parseToml(text);
+  } catch (error) {
+    throw new Error(`${file}: invalid TOML (${(error as Error).message})`);
   }
 }
 

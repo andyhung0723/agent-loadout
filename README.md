@@ -178,8 +178,10 @@ is easy to forget once applies are triggered from the herdr mod.
   conflict while desired and is **forgotten** (not deleted) once dropped from the manifest.
 - **Surgical patches.** JSON is rewritten as a whole object but only owned keys/items change;
   `config.toml` is edited at table-block level, so comments and formatting elsewhere survive.
-- **Optimistic writes.** Each patched file is re-read before writing; if it changed since `plan`
-  (e.g. a running Claude session saved `.claude.json`), that file is skipped and reported.
+- **Optimistic writes, scoped to what the plan touches.** Each patched file is re-read before
+  writing. If another process changed it since `plan` (a running Claude session saves
+  `.claude.json` constantly), loadout compares only the keys the plan read or edits: unchanged →
+  its edits are replayed onto the new content; changed → that file is skipped and the key named.
 - **Backups.** Every file loadout overwrites is copied to
   `~/.local/state/agent-loadout/backups/<timestamp>/` first. File modes are preserved.
 - **Codex hook trust** is keyed by array index in `config.toml` (`[hooks.state]`). loadout
