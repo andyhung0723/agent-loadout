@@ -1,7 +1,8 @@
 import { DRIVERS, type DriverContext, type PlanContext } from './drivers.ts';
-import { isProject, type Manifest } from './manifest.ts';
+import type { Manifest } from './manifest.ts';
+import { adapterOf } from './tools/index.ts';
 import type { OwnedUnit, State } from './state.ts';
-import { configFiles, describeLocation, desiredUnits, type Unit } from './units.ts';
+import { describeLocation, desiredUnits, type Unit } from './units.ts';
 
 export type Action =
   | 'ok'
@@ -150,34 +151,10 @@ async function collectWarnings(
   context: DriverContext,
 ): Promise<string[]> {
   const warnings: string[] = [];
-  const codexTargets = manifest.targets.filter(
-    (target) => target.tool === 'codex' && !isProject(target),
-  );
-
-  for (const target of codexTargets) {
-    const hooksFile = configFiles.codexHooks(target);
-    const hookUnits = units.filter((unit) => unit.file === hooksFile);
-    if (hookUnits.length === 0) continue;
-
-    const config = configFiles.codexConfig(target);
-    const enabled = await context.documents.tomlGet(config, ['features', 'hooks']);
-    if (enabled !== true) {
-      warnings.push(
-        `${target.name}: hooks are ignored until ${config} has [features] hooks = true`,
-      );
-    }
-
-    const created = entries.some(
-      (entry) =>
-        entry.target === target.name &&
-        (entry.action === 'create' || entry.action === 'replace') &&
-        hookUnits.some((unit) => unit.key === entry.key),
-    );
-    if (created) {
-      warnings.push(
-        `${target.name}: Codex will ask you to trust new or changed hooks on next start`,
-      );
-    }
+  for (const target of manifest.targets) {
+    const adapter = adapterOf(target.tool);
+    if (adapter.warnings)
+      warnings.push(...(await adapter.warnings(target, units, entries, context)));
   }
   return warnings;
 }

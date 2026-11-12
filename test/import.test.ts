@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdir, symlink } from 'node:fs/promises';
 import { afterEach, beforeEach, test } from 'node:test';
-import { Backup, Documents } from '../src/documents.ts';
 import { detectTargets, importFromTargets, renderManifest } from '../src/importer.ts';
 import { parseManifest } from '../src/manifest.ts';
 import { buildPlan } from '../src/planner.ts';

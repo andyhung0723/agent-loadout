@@ -105,6 +105,9 @@ afterwards: skills, MCP servers and hooks load at session start.
 | `plugin`       | `settings.json` → `enabledPlugins.<id>`        | `config.toml` → `[plugins."id"]`  | owned key / table |
 | `marketplace`  | `settings.json` → `extraKnownMarketplaces.<n>` | unsupported                       | owned key         |
 
+Claude Code and Codex are built-in adapters (`src/tools/`); supporting another CLI agent means
+adding one adapter file (see "Adding a tool" in `AGENTS.md`).
+
 ## Manifest
 
 ```toml

@@ -1,3 +1,4 @@
+import { adapterOf } from './tools/index.ts';
 import {
   configKey,
   resourceId,
@@ -126,7 +127,8 @@ export function sharedEntry(
   target: Target,
   sharedSkills: SharedSkills,
 ): string | undefined {
-  if (resource.kind !== 'skill' || target.tool !== 'codex' || isProject(target)) return undefined;
+  const sharesSkills = adapterOf(target.tool).sharesSkillsAcrossProfiles === true;
+  if (resource.kind !== 'skill' || !sharesSkills || isProject(target)) return undefined;
   return sharedSkills.get(configKey(resource));
 }
 

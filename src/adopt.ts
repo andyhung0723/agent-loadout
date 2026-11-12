@@ -10,7 +10,8 @@ import type { State } from './state.ts';
 import { nextSelectors } from './toggle.ts';
 import { tomlValue } from './toml-text.ts';
 import { treeHash } from './tree.ts';
-import { configFiles, unitKey } from './units.ts';
+import { layoutOf } from './tools/index.ts';
+import { unitKey } from './units.ts';
 
 type AdoptableKind = 'skill' | 'command';
 
@@ -109,10 +110,10 @@ export async function applyAdopt(
 function locate(original: string, manifest: Manifest): { kind: AdoptableKind; target: Target } {
   const parent = path.dirname(original);
   for (const target of manifest.targets) {
-    if (parent === configFiles.skills(target)) return { kind: 'skill', target };
-    if (parent === configFiles.commands(target) && target.tool === 'claude') {
-      return { kind: 'command', target };
-    }
+    const layout = layoutOf(target);
+    if (layout.copy) continue; // committed copies stay real files
+    if (parent === layout.skills) return { kind: 'skill', target };
+    if (parent === layout.commands) return { kind: 'command', target };
   }
   throw new ManifestError(`${original} is not inside a target's skills/ or commands/ folder`);
 }

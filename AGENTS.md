@@ -42,7 +42,9 @@ manifest.ts ─▶ units.ts ─▶ planner.ts ─▶ apply.ts
 | `selector.ts`                           | `*`, name, `tag:`, `tool:`, `!exclude` → targets                          |
 | `units.ts`                              | Translate a resource for one target into units (locator + value)          |
 | `drivers.ts`                            | `link`, `copy`, `file`, `json-key`, `json-item`, `toml-table`, `line`     |
-| `layout.ts`                             | Where each kind goes per target: profile, local or shared project         |
+| `tools/<tool>.ts`                       | Tool adapter: layout, value placement, agent format, import, warnings     |
+| `tools/index.ts` / `layout.ts`          | Adapter registry, `supports`, `layoutOf` / the generic `Layout` shape     |
+| `import-common.ts`                      | Import helpers the adapters share (hooks, MCP servers, JSON/TOML reads)   |
 | `documents.ts`                          | Cached JSON/TOML documents, optimistic flush, backups, atomic writes      |
 | `toml-text.ts`                          | Block-level TOML surgery that keeps the rest of the file byte-identical   |
 | `planner.ts` / `apply.ts`               | Actions (`create`, `replace`, `adopt`, `remove`, `forget`, …) and effects |
@@ -63,9 +65,26 @@ Every driver also implements `capture` (the value a unit occupies) and `revert` 
 `from` into `to`); `apply` journals `capture` before/after each change and `restore.ts` replays
 the journal backwards through `revert`.
 
-Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts`, import it in
-`importer.ts`, and mark unsupported tools in `UNSUPPORTED`. Adding a driver = implement the
-`Driver` interface and register it in `DRIVERS`; the planner needs no change.
+Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts` (value kinds:
+`place` in each adapter), and import it in the adapters' `importSettings`. Adding a driver =
+implement the `Driver` interface and register it in `DRIVERS`; the planner needs no change.
+
+### Adding a tool
+
+Everything tool-specific lives in `src/tools/<tool>.ts`, behind `ToolAdapter`
+(`src/tools/types.ts`):
+
+1. Add the name to `TOOLS` in `manifest.ts` (profile folders `~/.<tool>` and `~/.<tool>-<x>` are
+   then detected by `import`, and `[<kind>.<tool>]` overrides parse).
+2. Write the adapter: `layout` (profile, local and shared project paths; leave out what the tool
+   doesn't document), `holds` / `place` for hook, MCP, plugin and marketplace values,
+   `agent.render` / `agent.parse`, `importSettings`, and optionally `warnings`,
+   `detectProfile`, `sharesSkillsAcrossProfiles`.
+3. Register it in `ADAPTERS` (`src/tools/index.ts`); `Record<Tool, ToolAdapter>` makes a missing
+   one a type error.
+
+`test/adapters.test.ts` fails if any module outside `src/tools/` names a tool, so new
+tool-specific logic can't creep back into the core.
 
 ## Invariants (breaking one is a bug, not a style issue)
 

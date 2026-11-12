@@ -1,16 +1,11 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { parse as parseToml } from 'smol-toml';
-import { readOrNull } from './documents.ts';
 import {
-  detectClaudeJson,
   KINDS,
   resourceId,
   SOURCE_FILE_NAME,
   TOOLS,
-  type HookSpec,
   type Kind,
-  type McpServer,
   type Overrides,
   type Resource,
   type Target,
@@ -21,14 +16,14 @@ import { collapseHome } from './paths.ts';
 import { scanResource } from './secret-scan.ts';
 import { compressSelectors } from './selector.ts';
 import { tomlKey, tomlValue } from './toml-text.ts';
-import { configFiles } from './units.ts';
-import { isPlainObject, stableStringify, withoutUndefined, type Plain } from './values.ts';
+import { adapterOf, layoutOf } from './tools/index.ts';
+import type { Note } from './import-common.ts';
+import { stableStringify, type Plain } from './values.ts';
 
 const PROFILE_DIR = new RegExp(`^\\.(${TOOLS.join('|')})(?:-([\\w-]+))?$`);
 
 export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type Definition = DistributiveOmit<Resource, 'to'>;
-type Note = (kind: Kind, location: string, hint?: string) => void;
 
 export interface Unmanaged {
   target: string;
@@ -57,9 +52,7 @@ export async function detectTargets(home: string): Promise<Target[]> {
           tool: tool as Tool,
           dir: path.join(home, entry.name),
           tags: profile ? [profile] : [],
-          ...(tool === 'claude'
-            ? { claudeJson: detectClaudeJson(path.join(home, entry.name), home) }
-            : {}),
+          ...adapterOf(tool as Tool).detectProfile?.(path.join(home, entry.name), home),
         },
       ];
     })
@@ -135,184 +128,34 @@ export async function scanTarget(
       ...(hint ? { hint } : {}),
     });
 
-  const instructions = await observe(configFiles.instructions(target));
-  if (instructions.type === 'link') {
-    definitions.push({ kind: 'instructions', name: 'shared', source: instructions.to });
-  } else if (instructions.type === 'other') {
-    note('instructions', configFiles.instructions(target), 'a real file, not a symlink');
+  const layout = layoutOf(target);
+  if (layout.instructions) {
+    const instructions = await observe(layout.instructions);
+    if (instructions.type === 'link') {
+      definitions.push({ kind: 'instructions', name: 'shared', source: instructions.to });
+    } else if (instructions.type === 'other') {
+      note('instructions', layout.instructions, 'a real file, not a symlink');
+    }
   }
 
-  for (const entry of await scanDir(configFiles.skills(target))) {
+  for (const entry of layout.skills ? await scanDir(layout.skills) : []) {
     if (entry.source) definitions.push({ kind: 'skill', name: entry.name, source: entry.source });
     else note('skill', entry.path, 'a real directory, not a symlink (see `loadout adopt`)');
   }
 
-  if (target.tool === 'claude') {
-    for (const entry of await scanDir(configFiles.commands(target))) {
-      const name = entry.name.replace(/\.md$/, '');
-      if (entry.source) definitions.push({ kind: 'command', name, source: entry.source });
-      else note('command', entry.path, 'a real file, not a symlink (see `loadout adopt`)');
-    }
+  for (const entry of layout.commands ? await scanDir(layout.commands) : []) {
+    const name = entry.name.replace(/\.md$/, '');
+    if (entry.source) definitions.push({ kind: 'command', name, source: entry.source });
+    else note('command', entry.path, 'a real file, not a symlink (see `loadout adopt`)');
   }
 
-  for (const entry of await scanDir(configFiles.agents(target))) {
+  for (const entry of layout.agents ? await scanDir(layout.agents) : []) {
     note('agent', entry.path, 'hand-written; convert with `loadout agent extract`');
   }
 
-  if (target.tool === 'claude') {
-    const settings = await readJson(configFiles.claudeSettings(target));
-    const state = await readJson(configFiles.claudeState(target));
-    definitions.push(
-      ...importHooks(settings.hooks, configFiles.claudeSettings(target), home, note),
-      ...importClaudeMcp(state.mcpServers, home),
-      ...importClaudePlugins(settings.enabledPlugins),
-      ...importMarketplaces(settings.extraKnownMarketplaces),
-    );
-  } else {
-    const hooks = await readJson(configFiles.codexHooks(target));
-    const config = await readToml(configFiles.codexConfig(target));
-    definitions.push(
-      ...importHooks(hooks.hooks, configFiles.codexHooks(target), home, note),
-      ...importCodexMcp(config.mcp_servers, home),
-      ...importCodexPlugins(config.plugins, configFiles.codexConfig(target), note),
-    );
-  }
+  definitions.push(...(await adapterOf(target.tool).importSettings(target, home, note)));
 
   return { definitions, unmanaged };
-}
-
-function importHooks(value: unknown, file: string, home: string, note: Note): Definition[] {
-  if (!isPlainObject(value)) return [];
-  const bySpec = new Map<string, { spec: HookSpec; events: string[] }>();
-
-  for (const [event, groups] of Object.entries(value)) {
-    if (!Array.isArray(groups)) continue;
-    groups.forEach((group, index) => {
-      const spec = hookSpecOf(group, home);
-      if (!spec) {
-        note(
-          'hook',
-          `${file} hooks.${event}[${index}]`,
-          'only single-command hook groups are importable',
-        );
-        return;
-      }
-      const key = stableStringify(spec);
-      const entry = bySpec.get(key) ?? { spec, events: [] };
-      entry.events.push(event);
-      bySpec.set(key, entry);
-    });
-  }
-
-  return [...bySpec.values()].map(({ spec, events }) => ({
-    kind: 'hook',
-    name: hookName(spec.command),
-    events: events.sort(),
-    spec,
-    overrides: {},
-  }));
-}
-
-const HOOK_KEYS = ['type', 'command', 'timeout'];
-const HOOK_GROUP_KEYS = ['matcher', 'hooks'];
-
-function hookSpecOf(group: unknown, home: string): HookSpec | null {
-  if (!isPlainObject(group) || !Array.isArray(group.hooks) || group.hooks.length !== 1) {
-    return null;
-  }
-  const [hook] = group.hooks;
-  if (!isPlainObject(hook) || hook.type !== 'command' || typeof hook.command !== 'string') {
-    return null;
-  }
-  const hasUnknownKeys =
-    Object.keys(hook).some((key) => !HOOK_KEYS.includes(key)) ||
-    Object.keys(group).some((key) => !HOOK_GROUP_KEYS.includes(key));
-  if (hasUnknownKeys) return null;
-
-  return withoutUndefined({
-    matcher: typeof group.matcher === 'string' ? group.matcher : undefined,
-    command: collapseLeadingHome(hook.command, home),
-    timeout: typeof hook.timeout === 'number' ? hook.timeout : undefined,
-  });
-}
-
-function hookName(command: string): string {
-  const tokens = command.split(/\s+/).map((token) => token.replace(/^['"]|['"]$/g, ''));
-  const script = tokens.find((token) => token.includes('/')) ?? tokens[0] ?? 'hook';
-  return path.basename(script).replace(/\.[^.]+$/, '') || 'hook';
-}
-
-function importClaudeMcp(value: unknown, home: string): Definition[] {
-  if (!isPlainObject(value)) return [];
-  return Object.entries(value).flatMap(([name, raw]) => {
-    if (!isPlainObject(raw)) return [];
-    const { type, command, args, env, url, headers, ...rest } = raw;
-    const server = mcpServer({ command, args, env, url, headers }, home);
-    const inferredType = server.url ? 'http' : undefined;
-    const claude = withoutUndefined({ ...(type !== inferredType ? { type } : {}), ...rest });
-    return [mcpDefinition(name, server, { claude })];
-  });
-}
-
-function importCodexMcp(value: unknown, home: string): Definition[] {
-  if (!isPlainObject(value)) return [];
-  return Object.entries(value).flatMap(([name, raw]) => {
-    if (!isPlainObject(raw)) return [];
-    const { command, args, env, url, http_headers, ...rest } = raw;
-    const server = mcpServer({ command, args, env, url, headers: http_headers }, home);
-    const definition = mcpDefinition(name, server, { codex: rest });
-    return [isAppManaged(raw) ? { ...definition, mode: 'observe' } : definition];
-  });
-}
-
-function mcpServer(raw: Plain, home: string): McpServer {
-  return withoutUndefined({
-    command: typeof raw.command === 'string' ? collapseLeadingHome(raw.command, home) : undefined,
-    args: raw.args as string[] | undefined,
-    env: raw.env as Record<string, string> | undefined,
-    url: raw.url as string | undefined,
-    headers: raw.headers as Record<string, string> | undefined,
-  });
-}
-
-function mcpDefinition(name: string, server: McpServer, overrides: Overrides): Definition {
-  const nonEmpty = Object.fromEntries(
-    Object.entries(overrides).filter(([, table]) => table && Object.keys(table).length > 0),
-  );
-  return { kind: 'mcp', name, server, overrides: nonEmpty };
-}
-
-const APP_BUNDLE_PATH = /\/Applications\/|\.app\//;
-const APP_BUNDLED_PLUGIN = /@openai-bundled$/;
-
-function isAppManaged(server: Plain): boolean {
-  return APP_BUNDLE_PATH.test(stableStringify({ command: server.command, env: server.env }));
-}
-
-function importClaudePlugins(value: unknown): Definition[] {
-  if (!isPlainObject(value)) return [];
-  return Object.entries(value).flatMap(([name, enabled]): Definition[] =>
-    typeof enabled === 'boolean' ? [{ kind: 'plugin', name, enabled }] : [],
-  );
-}
-
-function importCodexPlugins(value: unknown, file: string, note: Note): Definition[] {
-  if (!isPlainObject(value)) return [];
-  return Object.entries(value).flatMap(([name, raw]): Definition[] => {
-    if (!isPlainObject(raw) || Object.keys(raw).some((key) => key !== 'enabled')) {
-      note('plugin', `${file} plugins.${name}`, 'has settings beyond "enabled"');
-      return [];
-    }
-    const definition: Definition = { kind: 'plugin', name, enabled: raw.enabled !== false };
-    return [APP_BUNDLED_PLUGIN.test(name) ? { ...definition, mode: 'observe' } : definition];
-  });
-}
-
-function importMarketplaces(value: unknown): Definition[] {
-  if (!isPlainObject(value)) return [];
-  return Object.entries(value).flatMap(([name, config]): Definition[] =>
-    isPlainObject(config) ? [{ kind: 'marketplace', name, config }] : [],
-  );
 }
 
 function disambiguateNames(items: { resource: Resource; targets: Target[] }[]): Resource[] {
@@ -355,23 +198,6 @@ async function scanDir(dir: string): Promise<{ name: string; path: string; sourc
         : { name, path: entryPath };
     }),
   );
-}
-
-async function readJson(file: string): Promise<Plain> {
-  const text = await readOrNull(file);
-  if (!text?.trim()) return {};
-  const parsed: unknown = JSON.parse(text);
-  return isPlainObject(parsed) ? parsed : {};
-}
-
-async function readToml(file: string): Promise<Plain> {
-  const text = await readOrNull(file);
-  return text ? parseToml(text) : {};
-}
-
-function collapseLeadingHome(command: string, home: string): string {
-  const [head = '', ...rest] = command.split(' ');
-  return [collapseHome(head, home), ...rest].join(' ');
 }
 
 export function renderManifest(result: ImportResult, home: string): string {

@@ -20,13 +20,7 @@ import {
 import { applyRelease, planRelease } from './release.ts';
 import { restoreRun } from './restore.ts';
 import { detectTargets, importFromTargets, renderManifest } from './importer.ts';
-import {
-  DEFAULT_RETENTION,
-  loadManifest,
-  ManifestError,
-  parseManifest,
-  type Manifest,
-} from './manifest.ts';
+import { DEFAULT_RETENTION, loadManifest, ManifestError, type Manifest } from './manifest.ts';
 import { planPrune, prune } from './retention.ts';
 import { reparse } from './manifest-edit.ts';
 import { filterOnly, OnlyError } from './only.ts';

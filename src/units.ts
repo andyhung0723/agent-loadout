@@ -5,20 +5,17 @@ import {
   configKey,
   ManifestError,
   resourceId,
-  type HookResource,
-  type Kind,
   type Manifest,
-  type McpResource,
   type Resource,
   type Target,
-  type Tool,
 } from './manifest.ts';
 import { exists } from './observe.ts';
 import { selectTargets } from './selector.ts';
-import { layoutOf, supports, type Layout } from './layout.ts';
+import type { Layout } from './layout.ts';
+import { adapterOf, layoutOf, supports } from './tools/index.ts';
 import { describeRef, findRefs, interpolate, type SecretResolver } from './secrets.ts';
 import { treeHash } from './tree.ts';
-import { fingerprintOf, sha256, withoutUndefined, type Plain } from './values.ts';
+import { fingerprintOf, sha256 } from './values.ts';
 
 export type DriverName =
   'link' | 'copy' | 'file' | 'json-key' | 'json-item' | 'toml-table' | 'line';
@@ -39,7 +36,7 @@ export interface Unit extends Locator {
   observe?: boolean;
 }
 
-export { supports } from './layout.ts';
+export { supports } from './tools/index.ts';
 
 export function unitKey(locator: Locator, resource: string): string {
   const base = `${locator.driver}:${locator.file}`;
@@ -53,19 +50,6 @@ const SHAREABLE_DRIVERS: ReadonlySet<DriverName> = new Set(['line']);
 export function describeLocation(locator: Locator): string {
   return locator.pointer.length ? `${locator.file} ${locator.pointer.join('.')}` : locator.file;
 }
-
-/** Paths inside a user-scope profile folder (import, adopt, agent extract); see `layoutOf`. */
-export const configFiles = {
-  claudeSettings: (target: Target) => path.join(target.dir, 'settings.json'),
-  claudeState: (target: Target) => target.claudeJson ?? path.join(target.dir, '.claude.json'),
-  codexConfig: (target: Target) => path.join(target.dir, 'config.toml'),
-  codexHooks: (target: Target) => path.join(target.dir, 'hooks.json'),
-  instructions: (target: Target) =>
-    path.join(target.dir, target.tool === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'),
-  skills: (target: Target) => path.join(target.dir, 'skills'),
-  commands: (target: Target) => path.join(target.dir, 'commands'),
-  agents: (target: Target) => path.join(target.dir, 'agents'),
-};
 
 const VALUE_DRIVERS: ReadonlySet<DriverName> = new Set(['json-key', 'json-item', 'toml-table']);
 
@@ -139,7 +123,8 @@ async function unitsFor(resource: Resource, target: Target): Promise<RawUnit[]> 
     make(locator, value, fingerprintOf(value));
   /** Keeps a file loadout puts in a repository out of `git status`. */
   const excluded = (file: string, units: RawUnit[]): RawUnit[] => {
-    if (!layout.gitExclude) return units;
+    const relative = path.relative(target.dir, file);
+    if (!layout.gitExclude || relative.startsWith('..') || path.isAbsolute(relative)) return units;
     const line = '/' + path.relative(target.dir, file).split(path.sep).join('/');
     return [
       ...units,
@@ -164,7 +149,7 @@ async function unitsFor(resource: Resource, target: Target): Promise<RawUnit[]> 
       ]);
     }
     case 'agent': {
-      const extension = target.tool === 'claude' ? 'md' : 'toml';
+      const extension = adapterOf(target.tool).agent.extension;
       const locator: Locator = {
         driver: 'file',
         file: path.join(layout.agents!, `${configKey(resource)}.${extension}`),
@@ -185,69 +170,17 @@ async function unitsFor(resource: Resource, target: Target): Promise<RawUnit[]> 
         return [make(locator, '', '', problem)];
       }
     }
-    case 'hook': {
-      const file = target.tool === 'claude' ? layout.claudeSettings! : layout.codexHooks!;
-      const group = hookGroup(resource, target.tool);
-      return excluded(
-        file,
-        resource.events.map((event) =>
-          valueUnit({ driver: 'json-item', file, pointer: ['hooks', event] }, group),
-        ),
+    case 'hook':
+    case 'mcp':
+    case 'plugin':
+    case 'marketplace': {
+      const placements = adapterOf(target.tool).place(resource.kind, resource, target);
+      const units = placements.map(({ locator, value }) => valueUnit(locator, value));
+      return [...new Set(placements.map(({ locator }) => locator.file))].reduce(
+        (all, file) => excluded(file, all),
+        units,
       );
     }
-    case 'mcp':
-      if (target.tool === 'claude') {
-        const { file, pointer } = layout.claudeMcp!;
-        return [
-          valueUnit(
-            { driver: 'json-key', file, pointer: [...pointer, configKey(resource)] },
-            claudeMcp(resource),
-          ),
-        ];
-      }
-      return [
-        valueUnit(
-          {
-            driver: 'toml-table',
-            file: layout.codexConfig!,
-            pointer: ['mcp_servers', configKey(resource)],
-          },
-          codexMcp(resource),
-        ),
-      ];
-    case 'plugin':
-      return target.tool === 'claude'
-        ? excluded(layout.claudeSettings!, [
-            valueUnit(
-              {
-                driver: 'json-key',
-                file: layout.claudeSettings!,
-                pointer: ['enabledPlugins', configKey(resource)],
-              },
-              resource.enabled,
-            ),
-          ])
-        : [
-            valueUnit(
-              {
-                driver: 'toml-table',
-                file: layout.codexConfig!,
-                pointer: ['plugins', configKey(resource)],
-              },
-              { enabled: resource.enabled },
-            ),
-          ];
-    case 'marketplace':
-      return excluded(layout.claudeSettings!, [
-        valueUnit(
-          {
-            driver: 'json-key',
-            file: layout.claudeSettings!,
-            pointer: ['extraKnownMarketplaces', configKey(resource)],
-          },
-          resource.config,
-        ),
-      ]);
   }
 }
 
@@ -264,30 +197,4 @@ function linkDestination(
     case 'command':
       return path.join(layout.commands!, `${name}.md`);
   }
-}
-
-export function hookGroup(resource: HookResource, tool: Tool): Plain {
-  const spec = { ...resource.spec, ...resource.overrides[tool] };
-  return withoutUndefined({
-    matcher: spec.matcher,
-    hooks: [
-      withoutUndefined({
-        type: 'command',
-        command: spec.command,
-        timeout: spec.timeout,
-      }),
-    ],
-  });
-}
-
-function claudeMcp(resource: McpResource): Plain {
-  const { command, args, env, url, headers } = resource.server;
-  const base = url ? { type: 'http', url, headers } : { command, args, env };
-  return withoutUndefined({ ...base, ...resource.overrides.claude });
-}
-
-function codexMcp(resource: McpResource): Plain {
-  const { command, args, env, url, headers } = resource.server;
-  const base = url ? { url, http_headers: headers } : { command, args, env };
-  return withoutUndefined({ ...base, ...resource.overrides.codex });
 }
