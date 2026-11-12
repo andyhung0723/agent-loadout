@@ -20,7 +20,14 @@ import {
 import { applyRelease, planRelease } from './release.ts';
 import { restoreRun } from './restore.ts';
 import { detectTargets, importFromTargets, renderManifest } from './importer.ts';
-import { loadManifest, ManifestError, parseManifest, type Manifest } from './manifest.ts';
+import {
+  DEFAULT_RETENTION,
+  loadManifest,
+  ManifestError,
+  parseManifest,
+  type Manifest,
+} from './manifest.ts';
+import { planPrune, prune } from './retention.ts';
 import { tomlValue } from './toml-text.ts';
 import { LockError, withLock } from './lock.ts';
 import { scanSharedCodexSkills } from './shared.ts';
@@ -63,6 +70,10 @@ Commands:
   release <resource> [<target>...] [--dry-run]
              stop managing it on those targets (default: all) and keep the files:
              drops them from "to" and forgets ownership; nothing is deleted
+  prune [--keep N] [--older-than DAYS] [--dry-run]
+             delete old runs (journal + backups) outside the retention policy;
+             writers do this automatically with [backups] from the manifest
+             (default: keep the newest 20 and anything from the last 30 days)
   history    list journaled runs (apply, toggle, restore), newest first
   restore <run>|latest [--only <resource>[@<target>]]... [--dry-run]
              undo a run entry by entry; entries changed since are left alone.
@@ -103,6 +114,8 @@ export async function main(argv: string[]): Promise<number> {
         'dry-run': { type: 'boolean', default: false },
         secrets: { type: 'string' },
         only: { type: 'string', multiple: true },
+        keep: { type: 'string' },
+        'older-than': { type: 'string' },
         help: { type: 'boolean', short: 'h', default: false },
       },
     });
@@ -162,6 +175,16 @@ export async function main(argv: string[]): Promise<number> {
           : await locked(context, 'release', () =>
               runRelease(context, positionals.slice(1), { dryRun: false }),
             );
+      case 'prune': {
+        const options = {
+          keep: values.keep,
+          olderThan: values['older-than'],
+          dryRun: values['dry-run'],
+        };
+        return options.dryRun
+          ? await runPrune(context, options)
+          : await locked(context, 'prune', () => runPrune(context, options));
+      }
       case 'history':
         return await runHistory(context);
       case 'restore':
@@ -195,8 +218,69 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
-function locked(context: Context, command: string, run: () => Promise<number>): Promise<number> {
-  return withLock(path.dirname(context.statePath), command, run);
+/** Every writer runs under the lock and then prunes old runs, still holding it. */
+function locked<T>(context: Context, command: string, run: () => Promise<T>): Promise<T> {
+  return withLock(path.dirname(context.statePath), command, async () => {
+    const result = await run();
+    await autoPrune(context);
+    return result;
+  });
+}
+
+/**
+ * Applies `[backups]` from the manifest (defaults when it can't be read) but always keeps the
+ * newest run, so the change just made stays undoable. Never fails the command it follows.
+ */
+async function autoPrune(context: Context): Promise<void> {
+  try {
+    const policy = await loadManifest(context.manifestPath)
+      .then((manifest) => manifest.backups ?? DEFAULT_RETENTION)
+      .catch(() => DEFAULT_RETENTION);
+    const root = backupsRoot(context);
+    const runs = await planPrune(root, { ...policy, keep: Math.max(1, policy.keep) });
+    await prune(root, runs);
+  } catch (error) {
+    process.stderr.write(`warning: pruning old backups failed: ${(error as Error).message}\n`);
+  }
+}
+
+async function runPrune(
+  context: Context,
+  options: { keep?: string; olderThan?: string; dryRun: boolean },
+): Promise<number> {
+  const configured = await loadManifest(context.manifestPath)
+    .then((manifest) => manifest.backups ?? DEFAULT_RETENTION)
+    .catch(() => DEFAULT_RETENTION);
+  const keep = options.keep === undefined ? configured.keep : wholeNumber(options.keep);
+  const maxAgeDays =
+    options.olderThan === undefined
+      ? configured.maxAgeDays
+      : wholeNumber(options.olderThan.replace(/d$/, ''));
+  if (keep === null || maxAgeDays === null) {
+    process.stderr.write('--keep and --older-than take a whole number (days: 30 or 30d)\n');
+    return EXIT.usage;
+  }
+
+  const root = backupsRoot(context);
+  const runs = await planPrune(root, { keep, maxAgeDays });
+  if (!options.dryRun) await prune(root, runs);
+  const policy = `keeping the newest ${keep} run(s) and anything from the last ${maxAgeDays} day(s)`;
+  const verb = options.dryRun ? 'Would delete' : 'Deleted';
+  print(
+    context,
+    { dryRun: options.dryRun, keep, maxAgeDays, pruned: runs },
+    runs.length === 0
+      ? `Nothing to prune (${policy}).`
+      : [
+          `${verb} ${runs.length} run(s), ${policy}:`,
+          ...runs.map((run) => `  ${run.id}  (${run.ageDays} d)`),
+        ].join('\n'),
+  );
+  return EXIT.ok;
+}
+
+function wholeNumber(text: string): number | null {
+  return /^\d+$/.test(text) ? Number(text) : null;
 }
 
 function secretMode(value: string | undefined): SecretMode | null {
@@ -547,9 +631,7 @@ async function runAdopt(
     return results;
   };
 
-  const results = options.dryRun
-    ? await run()
-    : await withLock(path.dirname(context.statePath), 'adopt', run);
+  const results = options.dryRun ? await run() : await locked(context, 'adopt', run);
   const verb = options.dryRun ? 'would adopt' : 'adopted';
   const lines = results.map(
     (plan) =>

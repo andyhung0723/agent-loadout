@@ -25,6 +25,7 @@ loadout toggle skill:code-review codex-work off --no-apply
 
 loadout release ddd-discovery claude-work      # stop managing it there, keep the files
 loadout history                                # journaled runs, newest first
+loadout prune --dry-run                        # what the retention policy would delete
 loadout restore latest [--only mcp:zhtw@codex] [--dry-run]   # undo a run, entry by entry
 
 loadout status --unmanaged                     # also list what the manifest doesn't cover
@@ -218,6 +219,17 @@ is easy to forget once applies are triggered from the herdr mod.
   since. Undoing a toggle also restores the manifest line if the manifest hasn't been edited
   since; undoing an `apply` doesn't touch the manifest, so the next `apply` redoes it. A restore
   is itself journaled, so it can be undone.
+- **Retention.** A run (journal + backups) is kept while it is among the newest `keep` runs **or**
+  younger than `max_age_days`; every writing command prunes the rest afterwards, always keeping
+  the run it just made. `loadout prune [--keep N] [--older-than DAYS] [--dry-run]` does it on
+  demand. Only folders named like a run id are ever deleted.
+
+  ```toml
+  [backups]          # defaults
+  keep = 20
+  max_age_days = 30
+  ```
+
 - **Codex hook trust** is keyed by array index in `config.toml` (`[hooks.state]`). loadout
   appends new hook groups and replaces changed ones in place so existing indices stay stable. It
   never writes trust state: Codex asks you to approve new hooks itself.
@@ -229,7 +241,7 @@ is easy to forget once applies are triggered from the herdr mod.
 ## Known limits
 
 - Backups and journals may contain resolved secrets; they live in a `0700` directory under
-  `~/.local/state/agent-loadout/backups/` (journals are `0600`). Nothing prunes them yet.
+  `~/.local/state/agent-loadout/backups/` (journals are `0600`), and are pruned by the retention policy above.
 - `restore` of a TOML table rewrites that block in loadout's own formatting; comments inside the
   block are only in the full-file backup. Undoing `adopt` isn't journaled.
 - App-managed entries (e.g. Codex's bundled `computer-use` / `node_repl` MCP servers) change on

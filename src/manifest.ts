@@ -95,7 +95,16 @@ export interface Manifest {
   resources: Resource[];
   /** Folders a tool loads for every profile, regardless of CODEX_HOME / CLAUDE_CONFIG_DIR. */
   shared?: SharedLayers;
+  backups?: Retention;
 }
+
+/** A run is kept while it is among the newest `keep` runs or younger than `maxAgeDays`. */
+export interface Retention {
+  keep: number;
+  maxAgeDays: number;
+}
+
+export const DEFAULT_RETENTION: Retention = { keep: 20, maxAgeDays: 30 };
 
 export interface SharedLayers {
   codexSkills: string[];
@@ -163,7 +172,21 @@ export function parseManifest(text: string, home?: string): Manifest {
       (dir) => expandHome(dir, home),
     ),
   };
-  return { targets, resources, shared };
+  const backupTable = root.optTable('backups');
+  const backups: Retention = {
+    keep: count(backupTable.optNumber('keep'), 'backups.keep') ?? DEFAULT_RETENTION.keep,
+    maxAgeDays:
+      count(backupTable.optNumber('max_age_days'), 'backups.max_age_days') ??
+      DEFAULT_RETENTION.maxAgeDays,
+  };
+  return { targets, resources, shared, backups };
+}
+
+function count(value: number | undefined, where: string): number | undefined {
+  if (value !== undefined && !(Number.isInteger(value) && value >= 0)) {
+    throw new ManifestError(`${where} must be a whole number >= 0`);
+  }
+  return value;
 }
 
 function parseTargets(table: Reader, home?: string): Target[] {

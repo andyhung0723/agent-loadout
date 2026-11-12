@@ -46,6 +46,7 @@ manifest.ts ─▶ units.ts ─▶ planner.ts ─▶ apply.ts
 | `release.ts`                            | Drop targets from `to` + forget ownership, never touching disk            |
 | `lock.ts`                               | Inter-process lock for every command that writes                          |
 | `journal.ts` / `restore.ts`             | Per-run before/after journal; undo a run entry by entry                   |
+| `retention.ts`                          | Prune old runs: outside newest `keep` and older than `max_age_days`       |
 | `cli.ts` / `render.ts`                  | Argument handling, text and `--json` output                               |
 
 Every driver also implements `capture` (the value a unit occupies) and `revert` (turn a captured
@@ -73,7 +74,8 @@ Adding a resource kind = parse it in `manifest.ts`, map it to units in `units.ts
    new content); otherwise abort that file. Back up anything overwritten. Preserve file modes.
 5. **Codex hook trust is index-keyed.** New hook groups are appended; changed ones are replaced in
    place. Never reorder hook arrays, never write `[hooks.state]`.
-6. **Writers hold the lock.** `apply`, `toggle`, `release`, `restore`, `adopt`, `import --write`,
+6. **Writers hold the lock** (via `locked()` in `cli.ts`, which also prunes old runs before
+   releasing it). `apply`, `toggle`, `release`, `restore`, `prune`, `adopt`, `import --write`,
    `agent extract --add` run inside `withLock`. Read-only commands (`status`, `plan`) must not take it.
 7. **Observe mode never writes**, and switching to it releases ownership without deleting.
 8. **Shared layers are facts, not targets.** Codex loads `~/.agents/skills` for every profile;
