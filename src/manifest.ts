@@ -451,6 +451,10 @@ function parseResource(kind: Kind, entry: Reader, sources: Map<string, string>):
       if (Object.keys(config).length === 0) {
         throw new ManifestError(`${entry.where()}: needs marketplace settings such as "source"`);
       }
+      // A source given as a plain path (Codex local marketplaces) is written absolute.
+      if (typeof config.source === 'string' && config.source.startsWith('~/')) {
+        return { kind, name, key, to, config: { ...config, source: entry.path('source') } };
+      }
       return { kind, name, key, to, config };
     }
   }

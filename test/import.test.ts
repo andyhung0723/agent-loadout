@@ -52,7 +52,7 @@ test('imports links, hooks, mcp and plugins; the resulting plan is adopt-only', 
   );
   await box.write(
     '.codex/config.toml',
-    `[mcp_servers.zhtw]\ncommand = "${box.home}/bin/zhtw"\nargs = []\n\n[plugins."figma@openai-curated"]\nenabled = true\n`,
+    `[mcp_servers.zhtw]\ncommand = "${box.home}/bin/zhtw"\nargs = []\n\n[plugins."figma@openai-curated"]\nenabled = true\n\n[marketplaces.pm]\nsource_type = "local"\nsource = "${box.home}/src/pm"\n\n[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${box.home}/.codex/.tmp/bundled-marketplaces/openai-bundled"\n`,
   );
 
   const targets = await detectTargets(box.home);
@@ -80,10 +80,17 @@ test('imports links, hooks, mcp and plugins; the resulting plan is adopt-only', 
     /name = "zhtw"\ncommand = "~\/bin\/zhtw"\nargs = \[\]\nto = \["claude-work", "codex"\]/,
   );
   assert.match(toml, /#\s+claude: ~\/\.claude\/skills\/synced/);
+  assert.match(
+    toml,
+    /name = "pm"\nsource_type = "local"\nsource = "~\/src\/pm"\nto = \["tool:codex"\]/,
+  );
+  assert.match(toml, /name = "openai-bundled"\nmode = "observe"/);
 
   const context = box.context();
   const plan = await buildPlan(parseManifest(toml, box.home), emptyState(), context);
-  const notAdopt = plan.entries.filter((entry) => entry.action !== 'adopt');
+  const notAdopt = plan.entries.filter(
+    (entry) => entry.action !== 'adopt' && entry.action !== 'observe',
+  );
   assert.deepEqual(notAdopt, []);
 });
 

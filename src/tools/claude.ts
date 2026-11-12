@@ -15,6 +15,7 @@ import {
 } from '../manifest.ts';
 import { isPlainObject, withoutUndefined, type Plain } from '../values.ts';
 import { hookGroup } from './hooks.ts';
+import { isCodexMarketplace } from './marketplace.ts';
 import type { Placement, ToolAdapter, ValueKind } from './types.ts';
 
 interface ClaudeLayout extends Layout {
@@ -78,9 +79,11 @@ export const claude: ToolAdapter = {
   detectProfile: (dir, home) => ({ claudeJson: detectClaudeJson(dir, home) }),
   layout: claudeLayout,
 
-  holds(kind: ValueKind, target: Target) {
+  holds(resource, target: Target) {
     const layout = claudeLayout(target);
-    return kind === 'mcp' ? layout.mcp !== undefined : layout.settings !== undefined;
+    if (resource.kind === 'mcp') return layout.mcp !== undefined;
+    if (resource.kind === 'marketplace' && isCodexMarketplace(resource.config)) return false;
+    return layout.settings !== undefined;
   },
 
   place(kind: ValueKind, resource: Resource, target: Target): Placement[] {

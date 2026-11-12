@@ -93,7 +93,7 @@ export function toStatusMatrix(
     const selected = new Set(selectTargets(resource.to, manifest.targets).map((t) => t.name));
     const cells: Record<string, CellState> = Object.fromEntries(
       manifest.targets.map((target): [string, CellState] => {
-        if (!supports(resource.kind, target)) return [target.name, 'n/a'];
+        if (!supports(resource, target)) return [target.name, 'n/a'];
         const shared = sharedEntry(resource, target, sharedSkills);
         if (!selected.has(target.name)) return [target.name, shared ? 'inherited' : 'off'];
         if (shared) {

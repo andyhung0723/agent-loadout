@@ -1,5 +1,5 @@
 import type { Layout } from '../layout.ts';
-import type { Kind, Target, Tool } from '../manifest.ts';
+import type { Kind, Resource, Target, Tool } from '../manifest.ts';
 import { claude } from './claude.ts';
 import { codex } from './codex.ts';
 import type { ToolAdapter, ValueKind } from './types.ts';
@@ -23,11 +23,15 @@ export function isValueKind(kind: Kind): kind is ValueKind {
   return VALUE_KINDS.has(kind);
 }
 
-/** Whether this target has a place for the kind; unsupported cells show "n/a". */
-export function supports(kind: Kind, target: Target): boolean {
-  if (isValueKind(kind)) return adapterOf(target.tool).holds(kind, target);
+function isValueResource(resource: Resource): resource is Resource & { kind: ValueKind } {
+  return isValueKind(resource.kind);
+}
+
+/** Whether this target has a place for the resource; unsupported cells show "n/a". */
+export function supports(resource: Resource, target: Target): boolean {
+  if (isValueResource(resource)) return adapterOf(target.tool).holds(resource, target);
   const layout = layoutOf(target);
-  switch (kind) {
+  switch (resource.kind) {
     case 'instructions':
       return layout.instructions !== undefined;
     case 'skill':

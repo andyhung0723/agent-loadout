@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdir } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { actions, Sandbox } from './sandbox.ts';
 
@@ -209,6 +209,68 @@ to = ["*"]
       await box.read('.codex/config.toml'),
       /\[plugins\."browser@openai-bundled"\]\nenabled = true\n$/,
     );
+  });
+});
+
+describe('codex marketplaces', () => {
+  const CODEX_HUB = `
+[[marketplace]]
+name = "hub-codex"
+key = "hub"
+source_type = "git"
+source = "https://github.com/org/hub.git"
+ref = "main"
+to = ["*"]
+
+[[marketplace]]
+name = "pm"
+source_type = "local"
+source = "~/src/pm"
+to = ["codex"]
+
+[[marketplace]]
+name = "hub-claude"
+key = "hub"
+source = { source = "github", repo = "org/hub" }
+to = ["*"]
+`;
+
+  test('each marketplace goes only to the tool whose format it is written in', async () => {
+    const { plan } = await box.reconcile(CODEX_HUB);
+    assert.deepEqual(actions(plan), [
+      'create marketplace:hub-claude@claude',
+      'create marketplace:hub-claude@claude-work',
+      'create marketplace:hub-codex@codex',
+      'create marketplace:pm@codex',
+    ]);
+    assert.equal(
+      await box.read('.codex/config.toml'),
+      `[marketplaces.hub]\nsource_type = "git"\nsource = "https://github.com/org/hub.git"\nref = "main"\n\n[marketplaces.pm]\nsource_type = "local"\nsource = "${box.home}/src/pm"\n`,
+    );
+    const settings = await box.readJson('.claude/settings.json');
+    assert.deepEqual(Object.keys(settings.extraKnownMarketplaces), ['hub']);
+  });
+
+  test('warns which codex command fetches a marketplace or installs a plugin', async () => {
+    const body = `${CODEX_HUB}
+[[plugin]]
+name = "pm@hub"
+to = ["codex"]
+`;
+    const warnings = (await box.plan(body)).warnings;
+    assert.equal(warnings.length, 2);
+    assert.match(
+      warnings[0]!,
+      /^codex: marketplace hub not fetched yet; run `CODEX_HOME=.* codex plugin marketplace upgrade`$/,
+    );
+    assert.match(
+      warnings[1]!,
+      /^codex: plugin pm@hub not installed yet; run `CODEX_HOME=.* codex plugin add pm@hub`$/,
+    );
+
+    await mkdir(box.path('.codex/.tmp/marketplaces/hub'), { recursive: true });
+    await mkdir(box.path('.codex/plugins/cache/hub/pm'), { recursive: true });
+    assert.deepEqual((await box.plan(body)).warnings, []);
   });
 });
 

@@ -28,8 +28,11 @@ export interface ToolAdapter {
   detectProfile?(dir: string, home: string): Partial<Target>;
   /** Paths for instructions, skills, commands and agents on this target. */
   layout(target: Target): Layout;
-  /** Whether this target has a place for a value kind (unsupported cells show "n/a"). */
-  holds(kind: ValueKind, target: Target): boolean;
+  /**
+   * Whether this target has a place for a value resource (unsupported cells show "n/a"). Takes the
+   * resource, not just its kind: a marketplace is written in one tool's own format.
+   */
+  holds(resource: Resource & { kind: ValueKind }, target: Target): boolean;
   /** Where and in what shape a value resource is written; only called when `holds` is true. */
   place(kind: ValueKind, resource: Resource, target: Target): Placement[];
   readonly agent: {

@@ -94,16 +94,16 @@ afterwards: skills, MCP servers and hooks load at session start.
 
 ## What it manages
 
-| Kind           | Claude target                                  | Codex target                      | Driver            |
-| -------------- | ---------------------------------------------- | --------------------------------- | ----------------- |
-| `instructions` | `CLAUDE.md`                                    | `AGENTS.md`                       | symlink           |
-| `skill`        | `skills/<name>`                                | `skills/<name>`                   | symlink           |
-| `command`      | `commands/<name>.md`                           | unsupported                       | symlink           |
-| `agent`        | `agents/<name>.md`                             | `agents/<name>.toml`              | generated file    |
-| `hook`         | `settings.json` → `hooks.<Event>[]`            | `hooks.json` → `hooks.<Event>[]`  | owned array item  |
-| `mcp`          | `.claude.json` → `mcpServers.<name>`           | `config.toml` → `[mcp_servers.x]` | owned key / table |
-| `plugin`       | `settings.json` → `enabledPlugins.<id>`        | `config.toml` → `[plugins."id"]`  | owned key / table |
-| `marketplace`  | `settings.json` → `extraKnownMarketplaces.<n>` | unsupported                       | owned key         |
+| Kind           | Claude target                                  | Codex target                       | Driver            |
+| -------------- | ---------------------------------------------- | ---------------------------------- | ----------------- |
+| `instructions` | `CLAUDE.md`                                    | `AGENTS.md`                        | symlink           |
+| `skill`        | `skills/<name>`                                | `skills/<name>`                    | symlink           |
+| `command`      | `commands/<name>.md`                           | unsupported                        | symlink           |
+| `agent`        | `agents/<name>.md`                             | `agents/<name>.toml`               | generated file    |
+| `hook`         | `settings.json` → `hooks.<Event>[]`            | `hooks.json` → `hooks.<Event>[]`   | owned array item  |
+| `mcp`          | `.claude.json` → `mcpServers.<name>`           | `config.toml` → `[mcp_servers.x]`  | owned key / table |
+| `plugin`       | `settings.json` → `enabledPlugins.<id>`        | `config.toml` → `[plugins."id"]`   | owned key / table |
+| `marketplace`  | `settings.json` → `extraKnownMarketplaces.<n>` | `config.toml` → `[marketplaces.x]` | owned key / table |
 
 Claude Code and Codex are built-in adapters (`src/tools/`); supporting another CLI agent means
 adding one adapter file (see "Adding a tool" in `AGENTS.md`).
@@ -150,7 +150,21 @@ name = "hub-work"
 key = "hub"                # config key, when the label must differ (defaults to name)
 source = { source = "github", repo = "org/hub" }
 to = ["claude-work"]
+
+[[marketplace]]            # Codex format: source_type + source (a string)
+name = "hub-codex"
+key = "hub"
+source_type = "git"        # git | local (local: a path; "~/" is expanded)
+source = "https://github.com/org/hub.git"
+ref = "main"               # optional, as are sparse_paths = ["…"]
+to = ["tool:codex"]
 ```
+
+A marketplace is written in one tool's own format, and that format decides where it can go: a
+`source = { … }` table is Claude's, `source_type` + `source` is Codex's; other targets show `n/a`.
+Codex only reads its config, so `plan` warns when a Git marketplace isn't cloned yet or an
+enabled plugin isn't installed, with the command to run (`codex plugin marketplace upgrade`,
+`codex plugin add <id>`). Marketplaces the Codex app unpacks itself import as `mode = "observe"`.
 
 ### Splitting the manifest
 
@@ -185,14 +199,14 @@ visibility = "local"       # default; or "shared"
 profile = "claude-work"    # local Claude only: whose .claude.json stores its MCP servers
 ```
 
-| Kind                        | Claude · local                               | Claude · shared         | Codex · local    | Codex · shared                             |
-| --------------------------- | -------------------------------------------- | ----------------------- | ---------------- | ------------------------------------------ |
-| instructions                | `CLAUDE.local.md` (link)                     | `CLAUDE.md` (copy)      | –                | `AGENTS.md` (copy)                         |
-| skill                       | `.claude/skills/<name>` (link)               | same path (copy)        | `.agents/skills` | `.agents/skills` (copy)                    |
-| command                     | `.claude/commands/<name>.md` (link)          | same path (copy)        | –                | –                                          |
-| agent                       | `.claude/agents/<name>.md`                   | same path               | –                | –                                          |
-| hook / plugin / marketplace | `.claude/settings.local.json`                | `.claude/settings.json` | –                | `.codex/hooks.json` · `.codex/config.toml` |
-| mcp                         | profile's `.claude.json` → `projects[<dir>]` | `.mcp.json`             | –                | `.codex/config.toml`                       |
+| Kind                        | Claude · local                               | Claude · shared         | Codex · local    | Codex · shared                                              |
+| --------------------------- | -------------------------------------------- | ----------------------- | ---------------- | ----------------------------------------------------------- |
+| instructions                | `CLAUDE.local.md` (link)                     | `CLAUDE.md` (copy)      | –                | `AGENTS.md` (copy)                                          |
+| skill                       | `.claude/skills/<name>` (link)               | same path (copy)        | `.agents/skills` | `.agents/skills` (copy)                                     |
+| command                     | `.claude/commands/<name>.md` (link)          | same path (copy)        | –                | –                                                           |
+| agent                       | `.claude/agents/<name>.md`                   | same path               | –                | –                                                           |
+| hook / plugin / marketplace | `.claude/settings.local.json`                | `.claude/settings.json` | –                | `.codex/hooks.json` · `.codex/config.toml` (no marketplace) |
+| mcp                         | profile's `.claude.json` → `projects[<dir>]` | `.mcp.json`             | –                | `.codex/config.toml`                                        |
 
 - **local** writes only what stays on this machine. Links and generated files inside the
   repository are added to `.git/info/exclude` (owned lines, removed again with the resource), so

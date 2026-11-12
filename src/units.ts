@@ -62,7 +62,7 @@ export async function desiredUnits(manifest: Manifest, secrets: SecretResolver):
   const byKey = new Map<string, Unit>();
   for (const resource of manifest.resources) {
     const targets = selectTargets(resource.to, manifest.targets).filter((target) =>
-      supports(resource.kind, target),
+      supports(resource, target),
     );
     for (const target of targets) {
       for (const raw of await unitsFor(resource, target)) {

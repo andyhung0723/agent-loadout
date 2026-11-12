@@ -33,7 +33,7 @@ export async function toggleInManifest(
   const resource = findResource(manifest, request.resource);
   const target = findTarget(manifest, request.target);
 
-  if (!supports(resource.kind, target)) {
+  if (!supports(resource, target)) {
     throw new ManifestError(
       `${resourceId(resource)} has no place on ${target.name} (${describeTarget(target)})`,
     );
