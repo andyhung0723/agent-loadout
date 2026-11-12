@@ -6,9 +6,10 @@ import { parseArgs } from 'node:util';
 import { applyAdopt, planAdopt } from './adopt.ts';
 import { extractAgent } from './agent-extract.ts';
 import { applyPlan } from './apply.ts';
+import { planCapture } from './capture.ts';
 import { Backup, Documents } from './documents.ts';
 import { createDefaultResolver, keychainStore, storeSecrets, type StoreResult } from './secrets.ts';
-import { extractSecrets, type ExtractedSecret } from './secret-import.ts';
+import { extractSecrets, KEYCHAIN_PREFIX, type ExtractedSecret } from './secret-import.ts';
 import {
   JournalError,
   listRuns,
@@ -22,7 +23,7 @@ import { restoreRun } from './restore.ts';
 import { detectTargets, importFromTargets, renderManifest } from './importer.ts';
 import { DEFAULT_RETENTION, loadManifest, ManifestError, type Manifest } from './manifest.ts';
 import { planPrune, prune } from './retention.ts';
-import { reparse } from './manifest-edit.ts';
+import { reparse, writeChange } from './manifest-edit.ts';
 import { filterOnly, OnlyError } from './only.ts';
 import { tomlValue } from './toml-text.ts';
 import { LockError, withLock } from './lock.ts';
@@ -68,6 +69,13 @@ Commands:
   agent extract <name> --out <file> [--add]
              write a neutral agent source from the existing claude .md / codex .toml;
              reports which targets it reproduces byte-for-byte (--add records it)
+  capture <kind>:<name> <target> [--dry-run] [--no-apply] [--secrets keychain|env|keep]
+             record a hook / MCP server / plugin / marketplace a tool installed itself
+             (e.g. "claude mcp add") as a manifest entry, secrets as references, then
+             apply just that entry; an identical entry only gains the target
+  secret set <name>     store stdin in the keychain as <name> (agent-loadout/ is added
+                        when <name> has no "/"); prints the reference to use
+  secret check <name>   exit 0 if the keychain has it, 2 if not (never prints the value)
   toggle <resource> <target> on|off
              switch a resource for one target: edits "to" in the manifest,
              then applies just that resource (skip with --no-apply)
@@ -169,6 +177,21 @@ export async function main(argv: string[]): Promise<number> {
           add: values.add,
           force: values.force,
         });
+      case 'capture': {
+        const secrets = secretMode(values.secrets);
+        if (!secrets) {
+          process.stderr.write('--secrets must be keychain, env or keep\n');
+          return EXIT.usage;
+        }
+        const options = { dryRun: values['dry-run'], apply: !values['no-apply'], secrets };
+        return options.dryRun
+          ? await runCapture(context, positionals.slice(1), options)
+          : await locked(context, 'capture', () =>
+              runCapture(context, positionals.slice(1), options),
+            );
+      }
+      case 'secret':
+        return await runSecret(context, positionals.slice(1));
       case 'toggle':
         return await locked(context, 'toggle', () =>
           runToggle(context, positionals.slice(1), { apply: !values['no-apply'] }),
@@ -509,6 +532,144 @@ async function runToggle(
     (entry) => entry.error || BLOCKED_ACTIONS.has(entry.entry.action),
   );
   return hasProblems ? EXIT.blocked : EXIT.ok;
+}
+
+async function runCapture(
+  context: Context,
+  args: string[],
+  options: { dryRun: boolean; apply: boolean; secrets: SecretMode },
+): Promise<number> {
+  const [query, target] = args;
+  if (!query || !target) {
+    process.stderr.write(
+      'Usage: loadout capture <kind>:<name> <target> [--dry-run] [--no-apply]\n',
+    );
+    return EXIT.usage;
+  }
+  const plan = await planCapture(query, target, {
+    manifestPath: context.manifestPath,
+    home: os.homedir(),
+    secrets: options.secrets,
+    resolver: createDefaultResolver(),
+  });
+  const references = plan.secrets.map(({ scheme, name, resources }) => ({
+    reference: `\${${scheme}:${name}}`,
+    resources,
+  }));
+  const summary = {
+    none: `${plan.resource} → ${plan.target}: already in the manifest`,
+    'extend-to': `${plan.resource} → ${plan.target}: identical entry exists; ${options.dryRun ? 'would add' : 'added'} the target to "to"`,
+    append: `${plan.resource} → ${plan.target}: ${options.dryRun ? 'would append' : 'appended'} to ${collapseHome(context.manifestPath)}`,
+  }[plan.change];
+  const details = [
+    summary,
+    ...(plan.entry ? ['', plan.entry, ''] : []),
+    ...references.map(({ reference }) =>
+      options.secrets === 'keychain'
+        ? `secret ${options.dryRun ? 'would move' : 'moved'} to the keychain: ${reference}`
+        : `secret replaced by ${reference}; export it wherever "loadout apply" runs`,
+    ),
+  ].join('\n');
+  const publicPlan = {
+    resource: plan.resource,
+    target: plan.target,
+    change: plan.change,
+    entry: plan.entry,
+    secrets: references,
+  };
+
+  if (options.dryRun || plan.change === 'none') {
+    print(context, { dryRun: options.dryRun, capture: publicPlan }, details);
+    return EXIT.ok;
+  }
+
+  if (options.secrets === 'keychain' && plan.secrets.length > 0) {
+    const store = keychainStore();
+    for (const secret of plan.secrets) {
+      const current = await store.read(secret.name);
+      if (current !== undefined && current !== secret.value) {
+        process.stderr.write(
+          `keychain ${secret.name} already holds a different value; nothing changed. ` +
+            `Store it under another name with "loadout secret set" and edit the entry by hand.\n`,
+        );
+        return EXIT.blocked;
+      }
+    }
+    await storeSecrets(plan.secrets, store);
+  }
+  await writeChange(plan.manifestChange!);
+
+  if (!options.apply) {
+    print(context, { capture: publicPlan }, details);
+    return EXIT.ok;
+  }
+  const inputs = await loadPlanInputs(context);
+  const scoped = {
+    ...inputs.plan,
+    entries: inputs.plan.entries.filter(
+      (entry) => entry.resource === plan.resource && entry.target === plan.target,
+    ),
+  };
+  const outcome = await applyPlan(scoped, inputs.state, inputs.drivers);
+  await saveState(context.statePath, outcome.state);
+  const journaled = await journalRun(
+    inputs.backupDir,
+    `capture ${plan.resource} ${plan.target}`,
+    outcome.journal,
+    plan.manifestChange!,
+  );
+  const run = journaled ? inputs.run : null;
+  print(
+    context,
+    { capture: publicPlan, results: outcome.results, warnings: scoped.warnings, run },
+    [details, renderApply(outcome.results, scoped.warnings)].join('\n') + undoHint(run),
+  );
+  const hasProblems = outcome.results.some(
+    (entry) => entry.error || BLOCKED_ACTIONS.has(entry.entry.action),
+  );
+  return hasProblems ? EXIT.blocked : EXIT.ok;
+}
+
+async function runSecret(context: Context, args: string[]): Promise<number> {
+  const [action, given] = args;
+  if ((action !== 'set' && action !== 'check') || !given) {
+    process.stderr.write('Usage: loadout secret set|check <name>\n');
+    return EXIT.usage;
+  }
+  const name = given.includes('/') ? given : `${KEYCHAIN_PREFIX}${given}`;
+  const reference = `\${keychain:${name}}`;
+  const store = keychainStore();
+
+  if (action === 'check') {
+    const present = (await store.read(name)) !== undefined;
+    print(
+      context,
+      { name, reference, present },
+      `${reference}: ${present ? 'present' : 'missing'}`,
+    );
+    return present ? EXIT.ok : EXIT.blocked;
+  }
+
+  if (process.stdin.isTTY) {
+    process.stderr.write(
+      `Pipe the value in so it never lands in shell history, e.g.: pbpaste | loadout secret set ${given}\n`,
+    );
+    return EXIT.usage;
+  }
+  const value = (await readStdin()).replace(/\r?\n$/, '');
+  if (!value) {
+    process.stderr.write('Nothing on stdin; nothing stored.\n');
+    return EXIT.usage;
+  }
+  const result = (await storeSecrets([{ name, value }], store)).get(name)!;
+  print(context, { name, reference, result }, `${result}: use ${reference} in the manifest`);
+  return EXIT.ok;
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 function undoHint(run: string | null): string {

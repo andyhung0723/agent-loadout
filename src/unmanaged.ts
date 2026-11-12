@@ -80,7 +80,7 @@ export async function findUnmanaged(
 export const SHARED_CODEX_TARGET = 'codex (shared)';
 
 /** import writes `~/…` for portability; the manifest expands it, so compare like with like. */
-function withAbsoluteCommand(resource: Resource, home: string): Resource {
+export function withAbsoluteCommand(resource: Resource, home: string): Resource {
   const expand = (command: string | undefined) =>
     command?.startsWith('~/') ? `${home}${command.slice(1)}` : command;
   switch (resource.kind) {

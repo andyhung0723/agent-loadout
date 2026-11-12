@@ -66,6 +66,10 @@ loadout restore latest [--only mcp:zhtw@codex] [--dry-run]   # undo a run, entry
 loadout status --unmanaged                     # also list what the manifest doesn't cover
 loadout adopt ~/.codex/skills/gsap-core --into ~/agent-config/skills [--dry-run]
 loadout agent extract task-worker --out ~/agent-config/agents/task-worker.md [--add]
+loadout capture mcp:context7 codex [--dry-run] [--no-apply]   # take over what a tool installed
+
+pbpaste | loadout secret set github     # → ${keychain:agent-loadout/github}
+loadout secret check github             # exit 0 present / 2 missing; never prints the value
 ```
 
 `--only <resource>[@<target>]` (repeatable, OR-ed) narrows `plan`, `apply` and `restore`.
@@ -77,6 +81,13 @@ error (exit 64), so a typo never looks like a successful no-op.
 - `adopt` moves a real skill directory (or Claude command file) out of a profile into a source
   folder, links it back, and appends it to the manifest. A byte-identical copy in another profile
   is parked in the backups folder and linked to the same source; a different copy is refused.
+- `capture <kind>:<name> <target>` takes over a hook, MCP server, plugin or marketplace that a
+  tool added by itself (`claude mcp add`, `/plugin install`, `codex mcp add` …): the live
+  definition becomes a manifest entry (secrets moved to the keychain as references, as `import`
+  does), then just that entry is applied, which only records ownership. If the manifest already
+  has an identical entry, the target is added to its `to`; a different one is refused. A
+  keychain name that already holds another value is refused too. Skills and commands go through
+  `adopt`, agents through `agent extract`.
 - `agent extract` writes a neutral agent source from the existing `.md` / `.toml` copies and
   reports which profiles it reproduces byte-for-byte; those are adopted without rewriting.
 
@@ -275,11 +286,11 @@ headers = { Authorization = "Bearer ${env:GITHUB_TOKEN}" }
 to = ["*"]
 ```
 
-| Reference         | Resolved from                                                         |
-| ----------------- | --------------------------------------------------------------------- |
-| `${env:NAME}`     | environment of the `loadout` process                                  |
-| `${keychain:svc}` | macOS Keychain (`security add-generic-password -s svc -a "$USER" -w`) |
-| `$${env:NAME}`    | escape: writes the literal `${env:NAME}`                              |
+| Reference         | Resolved from                                                   |
+| ----------------- | --------------------------------------------------------------- |
+| `${env:NAME}`     | environment of the `loadout` process                            |
+| `${keychain:svc}` | macOS Keychain (`… \| loadout secret set svc`, read from stdin) |
+| `$${env:NAME}`    | escape: writes the literal `${env:NAME}`                        |
 
 Secrets are resolved at plan/apply time and written into the target config, where the tools read
 them. They never reach `state.json` (fingerprints are SHA-256), plan output or JSON output. An
@@ -299,6 +310,11 @@ flagged with `# ⚠`, not converted.
 | `keychain` (macOS default) | `${keychain:agent-loadout/<name>}`  | stores each value in the login keychain |
 | `env`                      | `${env:LOADOUT_<NAME>}`             | nothing: lists the variables to export  |
 | `keep`                     | none (values verbatim, `⚠` comment) | –                                       |
+
+To add a secret by hand, pipe it to `loadout secret set <name>` (a bare name gets the
+`agent-loadout/` prefix; it refuses to read from a terminal so the value can't end up in shell
+history) and put the printed reference in the entry. `loadout secret check <name>` tells an agent
+whether a reference will resolve without revealing anything.
 
 Keychain writes pass the secret to `security -i` on stdin, never on the command line, and are
 read back to verify. Neither the text nor the `--json` output of `import` contains the values.

@@ -53,6 +53,7 @@ manifest.ts ─▶ units.ts ─▶ planner.ts ─▶ apply.ts
 | `secret-scan.ts` / `secret-import.ts`   | Detect secrets by value/context; turn them into references on import      |
 | `importer.ts` / `unmanaged.ts`          | Derive a manifest from targets / list what the manifest doesn't cover     |
 | `toggle.ts` / `adopt.ts` / `agent-*.ts` | Manifest-editing commands                                                 |
+| `capture.ts`                            | Turn a tool-installed hook/MCP/plugin/marketplace into a manifest entry   |
 | `release.ts`                            | Drop targets from `to` + forget ownership, never touching disk            |
 | `lock.ts`                               | Inter-process lock for every command that writes                          |
 | `journal.ts` / `restore.ts`             | Per-run before/after journal; undo a run entry by entry                   |
@@ -96,7 +97,7 @@ tool-specific logic can't creep back into the core.
    contains resolved values. Journals (`backups/<run>/journal.json`, 0600) hold snapshots, so
    snapshots must never be attached to printed results.
 3. **Surgical edits.** JSON changes only owned keys/items; TOML is edited per table block;
-   manifest edits (`toggle`, `release`, `adopt`, `agent extract --add`) rewrite one entry or
+   manifest edits (`toggle`, `release`, `adopt`, `capture`, `agent extract --add`) rewrite one entry or
    append one, in the file that defines it (`manifest.origins`; go through `manifest-edit.ts`)
    and validate the whole manifest including its `include`s before writing.
    Comments and formatting elsewhere must survive (tests assert byte equality).
@@ -106,7 +107,7 @@ tool-specific logic can't creep back into the core.
 5. **Codex hook trust is index-keyed.** New hook groups are appended; changed ones are replaced in
    place. Never reorder hook arrays, never write `[hooks.state]`.
 6. **Writers hold the lock** (via `locked()` in `cli.ts`, which also prunes old runs before
-   releasing it). `apply`, `toggle`, `release`, `restore`, `prune`, `adopt`, `import --write`,
+   releasing it). `apply`, `toggle`, `release`, `restore`, `prune`, `adopt`, `capture`, `import --write`,
    `agent extract --add` run inside `withLock`. Read-only commands (`status`, `plan`) must not take it.
 7. **Observe mode never writes**, and switching to it releases ownership without deleting.
 8. **Shared layers are facts, not targets.** Codex loads `~/.agents/skills` for every profile;
@@ -122,7 +123,8 @@ tool-specific logic can't creep back into the core.
 - Readable code over comments; comment only non-obvious reasons (see `lock.ts`, `unmanaged.ts`).
 - Every behavior change comes with a test in `test/` using the `Sandbox` helper (temp HOME with
   `.claude`, `.claude-work`, `.codex` targets). Never touch the real `~/.claude*` / `~/.codex*`
-  from tests; CLI tests run the binary with `HOME` set to the sandbox.
+  from tests; CLI tests run the binary with `HOME` set to the sandbox, and with
+  `LOADOUT_KEYCHAIN_FILE` (a JSON file standing in for the login keychain) when they store secrets.
 - Exit codes: 0 ok, 2 blocked (conflict/unresolved), 64 usage, 65 manifest error, 75 locked.
 - `--json` output is consumed by the herdr mod (`herdr-mods/herdr-loadout`); treat its shape
   as an interface: add fields, don't rename or remove them.

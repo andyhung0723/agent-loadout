@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { promisify } from 'node:util';
 import { isPlainObject } from './values.ts';
@@ -71,7 +72,7 @@ async function lookup(ref: SecretRef, env: NodeJS.ProcessEnv): Promise<string | 
     case 'env':
       return env[ref.name];
     case 'keychain':
-      return readKeychain(ref.name);
+      return keychainStore(env).read(ref.name);
   }
 }
 
@@ -118,7 +119,8 @@ export async function storeSecrets(
  * macOS login keychain via `security`. The secret goes through `security -i` on stdin, never
  * argv, so it can't be read from the process list.
  */
-export function keychainStore(): SecretStore {
+export function keychainStore(env: NodeJS.ProcessEnv = process.env): SecretStore {
+  if (env.LOADOUT_KEYCHAIN_FILE) return fileStore(env.LOADOUT_KEYCHAIN_FILE);
   return {
     read: readKeychain,
     async write(service, value) {
@@ -169,4 +171,21 @@ function mapStrings(value: unknown, map: (text: string) => string): unknown {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mapStrings(v, map)]));
   }
   return value;
+}
+
+/** Tests only (LOADOUT_KEYCHAIN_FILE): a JSON file standing in for the login keychain. */
+function fileStore(file: string): SecretStore {
+  const load = (): Record<string, string> => {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8')) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  };
+  return {
+    read: async (service) => load()[service],
+    async write(service, value) {
+      writeFileSync(file, JSON.stringify({ ...load(), [service]: value }), { mode: 0o600 });
+    },
+  };
 }

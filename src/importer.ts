@@ -241,6 +241,12 @@ export function renderManifest(result: ImportResult, home: string): string {
   return lines.join('\n').trimEnd() + '\n';
 }
 
+/** One `[[kind]]` entry as `import` writes it (paths spelled out, no source aliases). */
+export function renderEntry(resource: Resource, home: string): string {
+  const show = (p: string) => JSON.stringify(collapseHome(p, home));
+  return renderResource(resource, new Map(), show).join('\n');
+}
+
 function renderResource(
   resource: Resource,
   aliases: Map<string, string>,
