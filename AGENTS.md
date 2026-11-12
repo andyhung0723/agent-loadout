@@ -46,6 +46,7 @@ manifest.ts ─▶ units.ts ─▶ planner.ts ─▶ apply.ts
 | `release.ts`                            | Drop targets from `to` + forget ownership, never touching disk            |
 | `lock.ts`                               | Inter-process lock for every command that writes                          |
 | `journal.ts` / `restore.ts`             | Per-run before/after journal; undo a run entry by entry                   |
+| `only.ts`                               | `--only` selectors shared by `plan`, `apply` and `restore`                |
 | `retention.ts`                          | Prune old runs: outside newest `keep` and older than `max_age_days`       |
 | `cli.ts` / `render.ts`                  | Argument handling, text and `--json` output                               |
 

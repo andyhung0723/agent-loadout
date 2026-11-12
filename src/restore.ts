@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { writeAtomic } from './documents.ts';
 import { DRIVERS, type DriverContext } from './drivers.ts';
 import type { Journal, JournalEntry } from './journal.ts';
+import { filterOnly } from './only.ts';
 import type { State } from './state.ts';
 import { fingerprintOf, stableStringify } from './values.ts';
 
@@ -35,7 +36,7 @@ export async function restoreRun(
   context: DriverContext,
   options: { only?: string[]; dryRun: boolean },
 ): Promise<RestoreOutcome> {
-  const selected = journal.entries.filter((entry) => matchesOnly(entry, options.only)).reverse();
+  const selected = filterOnly(journal.entries, options.only).reverse();
   const results: RestoreResult[] = [];
   const applied: JournalEntry[] = [];
 
@@ -98,13 +99,6 @@ export async function restoreRun(
     journal: undone,
     manifest: await restoreManifest(journal, write),
   };
-}
-
-function matchesOnly(entry: JournalEntry, only: string[] | undefined): boolean {
-  if (!only || only.length === 0) return true;
-  return only.some(
-    (selector) => selector === entry.resource || selector === `${entry.resource}@${entry.target}`,
-  );
 }
 
 /** json-item looks its item up by fingerprint; the others ignore it. */

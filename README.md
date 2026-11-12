@@ -18,6 +18,7 @@ loadout import            # print a manifest derived from the current setup
 loadout import --write    # write it to ~/.config/agent-loadout/loadout.toml
 loadout plan              # dry run (exit 2 if anything is blocked)
 loadout apply             # reconcile; the first run after import only "adopts"
+loadout apply --only mcp:context7 --only 'hook:*@codex'   # just these; the rest stays pending
 loadout status [--json]   # resource × target matrix (JSON feeds the herdr mod)
 
 loadout toggle ddd-discovery claude-work on    # flip one resource for one account
@@ -32,6 +33,10 @@ loadout status --unmanaged                     # also list what the manifest doe
 loadout adopt ~/.codex/skills/gsap-core --into ~/agent-config/skills [--dry-run]
 loadout agent extract task-worker --out ~/agent-config/agents/task-worker.md [--add]
 ```
+
+`--only <resource>[@<target>]` (repeatable, OR-ed) narrows `plan`, `apply` and `restore`.
+`<resource>` is `kind:name`, a bare name, `kind:*` or `*`. A selector that matches nothing is an
+error (exit 64), so a typo never looks like a successful no-op.
 
 **Bringing existing things under management**
 

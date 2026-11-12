@@ -28,6 +28,7 @@ import {
   type Manifest,
 } from './manifest.ts';
 import { planPrune, prune } from './retention.ts';
+import { filterOnly, OnlyError } from './only.ts';
 import { tomlValue } from './toml-text.ts';
 import { LockError, withLock } from './lock.ts';
 import { scanSharedCodexSkills } from './shared.ts';
@@ -35,7 +36,7 @@ import { toggleInManifest } from './toggle.ts';
 import { findUnmanaged } from './unmanaged.ts';
 import { exists } from './observe.ts';
 import { collapseHome, DEFAULT_MANIFEST_PATH, DEFAULT_STATE_PATH, expandHome } from './paths.ts';
-import { BLOCKED_ACTIONS, buildPlan } from './planner.ts';
+import { BLOCKED_ACTIONS, buildPlan, type Plan } from './planner.ts';
 import {
   renderApply,
   renderHistory,
@@ -55,6 +56,8 @@ Commands:
   status     resource × target matrix (--unmanaged: also list what the manifest doesn't cover)
   plan       show what apply would change
   apply      reconcile all targets to the manifest
+             (both: --only <resource>[@<target>], repeatable; resource is kind:name,
+             a name, kind:* or *; everything else stays pending)
   import     generate a manifest from the current setup; secrets found in MCP servers,
              hooks and marketplaces become references (--secrets keychain|env|keep,
              default keychain on macOS; --write stores them)
@@ -139,9 +142,9 @@ export async function main(argv: string[]): Promise<number> {
       case 'status':
         return await runStatus(context, { unmanaged: values.unmanaged });
       case 'plan':
-        return await runPlan(context);
+        return await runPlan(context, values.only);
       case 'apply':
-        return await locked(context, 'apply', () => runApply(context));
+        return await locked(context, 'apply', () => runApply(context, values.only));
       case 'import': {
         const secrets = secretMode(values.secrets);
         if (!secrets) {
@@ -206,7 +209,7 @@ export async function main(argv: string[]): Promise<number> {
       process.stderr.write(`manifest: ${error.message}\n`);
       return EXIT.manifest;
     }
-    if (error instanceof JournalError) {
+    if (error instanceof JournalError || error instanceof OnlyError) {
       process.stderr.write(`${error.message}\n`);
       return EXIT.usage;
     }
@@ -345,17 +348,25 @@ async function runStatus(context: Context, options: { unmanaged: boolean }): Pro
   return EXIT.ok;
 }
 
-async function runPlan(context: Context): Promise<number> {
-  const { plan } = await loadPlanInputs(context);
+/** Narrow a plan to `--only`; other pending changes stay pending for a later run. */
+function scopePlan(plan: Plan, only: string[] | undefined): Plan {
+  return { ...plan, entries: filterOnly(plan.entries, only) };
+}
+
+async function runPlan(context: Context, only?: string[]): Promise<number> {
+  const plan = scopePlan((await loadPlanInputs(context)).plan, only);
   print(context, { entries: plan.entries, warnings: plan.warnings }, renderPlan(plan));
   return plan.entries.some((entry) => BLOCKED_ACTIONS.has(entry.action)) ? EXIT.blocked : EXIT.ok;
 }
 
-async function runApply(context: Context): Promise<number> {
-  const { state, plan, drivers, backupDir, run } = await loadPlanInputs(context);
+async function runApply(context: Context, only?: string[]): Promise<number> {
+  const inputs = await loadPlanInputs(context);
+  const { state, drivers, backupDir, run } = inputs;
+  const plan = scopePlan(inputs.plan, only);
   const outcome = await applyPlan(plan, state, drivers);
   await saveState(context.statePath, outcome.state);
-  const journaled = await journalRun(backupDir, 'apply', outcome.journal);
+  const command = only?.length ? `apply --only ${only.join(' --only ')}` : 'apply';
+  const journaled = await journalRun(backupDir, command, outcome.journal);
   print(
     context,
     { results: outcome.results, warnings: plan.warnings, backupDir, run: journaled ? run : null },
