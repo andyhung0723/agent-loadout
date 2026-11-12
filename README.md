@@ -26,8 +26,11 @@ loadout help
 `git pull` updates the command in place. Uninstall with `pnpm remove -g agent-loadout`. Without
 a global pnpm setup, a symlink works as well: `ln -s "$PWD/bin/loadout.js" ~/.local/bin/loadout`.
 
-Not on npm yet: Node refuses to strip types from files under `node_modules`
-(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), so a published package needs a build step first.
+Not on npm yet. Packaging is ready: Node refuses to strip types under `node_modules`
+(`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), so `prepack` compiles `src/` to `dist/` and the
+bin runs `dist/` when it is installed under `node_modules`, the sources otherwise.
+`pnpm smoke:pack` (also in CI) packs the tarball, installs it with npm into a scratch project and
+runs `import` → `plan` → `apply` → `status` against a scratch HOME.
 
 ### First run, without touching anything
 

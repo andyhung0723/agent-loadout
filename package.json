@@ -23,14 +23,23 @@
   "bin": {
     "loadout": "./bin/loadout.js"
   },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=24"
   },
   "packageManager": "pnpm@12.14.0",
   "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
     "test": "node --test 'test/**/*.test.ts'",
     "typecheck": "tsc",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "smoke:pack": "node scripts/smoke-pack.ts"
   },
   "dependencies": {
     "smol-toml": "^1.9.1",

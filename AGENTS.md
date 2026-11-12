@@ -10,15 +10,22 @@ guide; this file is about changing the code without breaking its guarantees.
 pnpm test         # node --test, every test file in test/
 pnpm typecheck    # tsc (no emit)
 pnpm format       # prettier --write .
+pnpm smoke:pack   # pack, npm-install the tarball, run it against a scratch HOME
 node bin/loadout.js <command> --manifest <file> --state <file>   # run against a sandbox
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck, tests and `prettier --check` on macOS and Linux.
+CI (`.github/workflows/ci.yml`) runs typecheck, tests, `smoke:pack` and `prettier --check` on
+macOS and Linux.
 
 ## Runtime
 
 - Node >= 24 runs the TypeScript directly (type stripping). Only **erasable syntax**: no enums,
-  no parameter properties, no namespaces. Imports use the `.ts` extension. There is no build.
+  no parameter properties, no namespaces. Imports use the `.ts` extension.
+- There is no build for development. `pnpm build` (run by `prepack`) compiles `src/` to `dist/`
+  with `.ts` imports rewritten to `.js`, only because Node won't strip types under
+  `node_modules`. `bin/loadout.js` picks `dist/` only when it lives under `node_modules`.
+  Keep imports static and relative so the rewrite covers them; `pnpm smoke:pack` checks the
+  packed tarball end to end.
 - Dependencies are deliberate and few: `smol-toml`, `yaml`. Adding one needs a reason.
 
 ## Architecture
