@@ -39,7 +39,8 @@ manifest.ts ─▶ units.ts ─▶ planner.ts ─▶ apply.ts
 | `toml-text.ts`                          | Block-level TOML surgery that keeps the rest of the file byte-identical   |
 | `planner.ts` / `apply.ts`               | Actions (`create`, `replace`, `adopt`, `remove`, `forget`, …) and effects |
 | `state.ts`                              | Ownership records (state v3) and migrations                               |
-| `secrets.ts`                            | `${env:…}` / `${keychain:…}` resolution                                   |
+| `secrets.ts`                            | `${env:…}` / `${keychain:…}` resolution; keychain store                   |
+| `secret-scan.ts` / `secret-import.ts`   | Detect secrets by value/context; turn them into references on import      |
 | `importer.ts` / `unmanaged.ts`          | Derive a manifest from targets / list what the manifest doesn't cover     |
 | `toggle.ts` / `adopt.ts` / `agent-*.ts` | Manifest-editing commands                                                 |
 | `lock.ts`                               | Inter-process lock for every command that writes                          |

@@ -108,7 +108,7 @@ test('same config key with different definitions keeps the key and renames only 
   const toml = renderManifest(result, box.home);
   assert.match(toml, /name = "hub-claude"\nkey = "hub"/);
   assert.match(toml, /name = "hub-claude-work"\nkey = "hub"/);
-  assert.match(toml, /# ⚠ looks like it contains a secret.*\n\[\[mcp\]\]\nname = "ctx"/);
+  assert.match(toml, /# ⚠ may contain a secret.*\n\[\[mcp\]\]\nname = "ctx"/);
 
   const context = box.context();
   const plan = await buildPlan(parseManifest(toml, box.home), emptyState(), context);

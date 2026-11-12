@@ -171,6 +171,23 @@ them. They never reach `state.json` (fingerprints are SHA-256), plan output or J
 unresolvable reference marks the unit `unresolved` and nothing is written. Rotating a secret
 shows up as `replace`.
 
+**Import converts what it finds.** `loadout import` scans the strings MCP servers, hooks and
+marketplaces write (args, env, headers, URL query, hook commands) and replaces secrets with
+references. Detection looks at the value, not just the key: known token formats (`sk-…`,
+`ghp_…`, `ctx7sk-…`, JWTs, …) anywhere, plus opaque values under secret-named keys, flags
+(`--api-key x`, `--token=x`), `Authorization`/`Bearer` and query params. One value used in
+several places becomes one reference. Long high-entropy strings with no other signal are only
+flagged with `# ⚠`, not converted.
+
+| `--secrets`                | Reference                           | `--write` also                          |
+| -------------------------- | ----------------------------------- | --------------------------------------- |
+| `keychain` (macOS default) | `${keychain:agent-loadout/<name>}`  | stores each value in the login keychain |
+| `env`                      | `${env:LOADOUT_<NAME>}`             | nothing: lists the variables to export  |
+| `keep`                     | none (values verbatim, `⚠` comment) | –                                       |
+
+Keychain writes pass the secret to `security -i` on stdin, never on the command line, and are
+read back to verify. Neither the text nor the `--json` output of `import` contains the values.
+
 Prefer the keychain: `${env:…}` has to be exported in whatever shell runs `loadout apply`, which
 is easy to forget once applies are triggered from the herdr mod.
 
@@ -204,8 +221,6 @@ is easy to forget once applies are triggered from the herdr mod.
 
 ## Known limits
 
-- `import` copies values verbatim and flags likely secrets with a `⚠` comment; swap them for a
-  `${keychain:…}` / `${env:…}` reference before committing the manifest.
 - Backups and journals may contain resolved secrets; they live in a `0700` directory under
   `~/.local/state/agent-loadout/backups/` (journals are `0600`). Nothing prunes them yet.
 - `restore` of a TOML table rewrites that block in loadout's own formatting; comments inside the

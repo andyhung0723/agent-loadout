@@ -18,6 +18,7 @@ import {
 } from './manifest.ts';
 import { observe } from './observe.ts';
 import { collapseHome } from './paths.ts';
+import { scanResource } from './secret-scan.ts';
 import { compressSelectors } from './selector.ts';
 import { tomlKey, tomlValue } from './toml-text.ts';
 import { configFiles } from './units.ts';
@@ -422,7 +423,7 @@ function renderResource(
   const head = [
     ...(looksSecret(resource)
       ? [
-          '# ⚠ looks like it contains a secret — replace it with "${env:NAME}" or "${keychain:service}" before committing',
+          '# ⚠ may contain a secret (not converted) — use "${keychain:service}" / "${env:NAME}" if it is one',
         ]
       : []),
     `[[${resource.kind}]]`,
@@ -475,12 +476,8 @@ function renderResource(
   }
 }
 
-const SECRET_PATTERN = /(api[-_]?key|token|secret|password|bearer|\bsk-|ctx7sk)/i;
-
 function looksSecret(resource: Resource): boolean {
-  if (resource.kind !== 'mcp') return false;
-  const { args, env, headers } = resource.server;
-  return SECRET_PATTERN.test(stableStringify({ args, env, headers, ...resource.overrides }));
+  return scanResource(resource).length > 0;
 }
 
 function aliasFor(

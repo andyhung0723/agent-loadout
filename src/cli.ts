@@ -7,7 +7,8 @@ import { applyAdopt, planAdopt } from './adopt.ts';
 import { extractAgent } from './agent-extract.ts';
 import { applyPlan } from './apply.ts';
 import { Backup, Documents } from './documents.ts';
-import { createDefaultResolver } from './secrets.ts';
+import { createDefaultResolver, keychainStore, storeSecrets, type StoreResult } from './secrets.ts';
+import { extractSecrets, type ExtractedSecret } from './secret-import.ts';
 import {
   JournalError,
   listRuns,
@@ -46,7 +47,9 @@ Commands:
   status     resource × target matrix (--unmanaged: also list what the manifest doesn't cover)
   plan       show what apply would change
   apply      reconcile all targets to the manifest
-  import     generate a manifest from the current setup
+  import     generate a manifest from the current setup; secrets found in MCP servers,
+             hooks and marketplaces become references (--secrets keychain|env|keep,
+             default keychain on macOS; --write stores them)
   adopt <path> --into <dir>
              move a real skill/command out of a target into a source folder,
              link it back and record it in the manifest (--dry-run to preview)
@@ -94,6 +97,7 @@ export async function main(argv: string[]): Promise<number> {
         out: { type: 'string' },
         add: { type: 'boolean', default: false },
         'dry-run': { type: 'boolean', default: false },
+        secrets: { type: 'string' },
         only: { type: 'string', multiple: true },
         help: { type: 'boolean', short: 'h', default: false },
       },
@@ -121,12 +125,18 @@ export async function main(argv: string[]): Promise<number> {
         return await runPlan(context);
       case 'apply':
         return await locked(context, 'apply', () => runApply(context));
-      case 'import':
+      case 'import': {
+        const secrets = secretMode(values.secrets);
+        if (!secrets) {
+          process.stderr.write('--secrets must be keychain, env or keep\n');
+          return EXIT.usage;
+        }
         return values.write
           ? await locked(context, 'import', () =>
-              runImport(context, { write: true, force: values.force }),
+              runImport(context, { write: true, force: values.force, secrets }),
             )
-          : await runImport(context, { write: false, force: false });
+          : await runImport(context, { write: false, force: false, secrets });
+      }
       case 'adopt':
         return await runAdopt(context, positionals.slice(1), {
           into: values.into,
@@ -177,6 +187,11 @@ export async function main(argv: string[]): Promise<number> {
 
 function locked(context: Context, command: string, run: () => Promise<number>): Promise<number> {
   return withLock(path.dirname(context.statePath), command, run);
+}
+
+function secretMode(value: string | undefined): SecretMode | null {
+  if (value === undefined) return process.platform === 'darwin' ? 'keychain' : 'env';
+  return value === 'keychain' || value === 'env' || value === 'keep' ? value : null;
 }
 
 function backupsRoot(context: Context): string {
@@ -259,29 +274,71 @@ async function runApply(context: Context): Promise<number> {
   return hasProblems ? EXIT.blocked : EXIT.ok;
 }
 
+type SecretMode = 'keychain' | 'env' | 'keep';
+
 async function runImport(
   context: Context,
-  options: { write: boolean; force: boolean },
+  options: { write: boolean; force: boolean; secrets: SecretMode },
 ): Promise<number> {
   const home = os.homedir();
-  const result = await importFromTargets(await detectTargets(home), home);
+  const imported = await importFromTargets(await detectTargets(home), home);
+  const extraction =
+    options.secrets === 'keep' ? null : extractSecrets(imported.resources, options.secrets);
+  const result = extraction ? { ...imported, resources: extraction.resources } : imported;
+  const secrets = extraction?.secrets ?? [];
   const toml = renderManifest(result, home);
+  const publicSecrets = secrets.map(({ scheme, name, resources }) => ({
+    reference: `\${${scheme}:${name}}`,
+    resources,
+  }));
 
   if (!options.write) {
-    print(context, result, toml.trimEnd());
+    print(context, { ...result, secrets: publicSecrets }, toml.trimEnd());
+    if (!context.json && secrets.length > 0) {
+      process.stderr.write(`\n${describeSecrets(secrets, options.secrets, false)}\n`);
+    }
     return EXIT.ok;
   }
   if (!options.force && (await exists(context.manifestPath))) {
     process.stderr.write(`Refusing to overwrite ${context.manifestPath} (use --force).\n`);
     return EXIT.usage;
   }
+
+  const stored =
+    options.secrets === 'keychain' ? await storeSecrets(secrets, keychainStore()) : null;
   await mkdir(path.dirname(context.manifestPath), { recursive: true });
   await writeFile(context.manifestPath, toml);
   process.stdout.write(
-    `Wrote ${context.manifestPath} — ${result.resources.length} resources across ${result.targets.length} targets.\n` +
-      'Next: "loadout plan" should show only "adopt" entries; "loadout apply" records ownership without touching files.\n',
+    [
+      `Wrote ${context.manifestPath} — ${result.resources.length} resources across ${result.targets.length} targets.`,
+      ...(secrets.length > 0 ? [describeSecrets(secrets, options.secrets, true, stored)] : []),
+      'Next: "loadout plan" should show only "adopt" entries; "loadout apply" records ownership without touching files.',
+    ].join('\n') + '\n',
   );
   return EXIT.ok;
+}
+
+function describeSecrets(
+  secrets: ExtractedSecret[],
+  mode: SecretMode,
+  written: boolean,
+  stored?: Map<string, StoreResult> | null,
+): string {
+  const lines = secrets.map((secret) => {
+    const status = stored?.get(secret.name);
+    return `  \${${secret.scheme}:${secret.name}}  ← ${secret.resources.join(', ')}${status ? `  (${status})` : ''}`;
+  });
+  if (mode === 'keychain') {
+    const head = written
+      ? `Moved ${secrets.length} secret(s) to the keychain:`
+      : `${secrets.length} secret(s) replaced by keychain references; --write stores them in the keychain:`;
+    return [head, ...lines].join('\n');
+  }
+  return [
+    `${secrets.length} secret(s) replaced by env references. Export them wherever "loadout apply" runs`,
+    '(the current values are still in the target configs):',
+    ...lines,
+  ].join('\n');
 }
 
 function print(context: Context, data: unknown, text: string): void {
