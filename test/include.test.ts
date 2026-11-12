@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, readlink } from 'node:fs/promises';
+import { lstat, mkdir, readlink, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, test } from 'node:test';
@@ -136,6 +136,28 @@ describe('editing commands follow the file that defines the resource', () => {
     assert.match(stdout, /Manifest restored/);
     assert.equal(await box.read('skills.toml'), skill('review', '["claude"]'));
     await assert.rejects(lstat(box.path('.codex/skills/review')));
+  });
+
+  test('a symlinked manifest resolves includes and edits next to the real file', async () => {
+    await mkdir(box.path('link'));
+    await symlink(box.path('loadout.toml'), box.path('link/loadout.toml'));
+    await run(
+      process.execPath,
+      [
+        BIN,
+        'toggle',
+        'review',
+        'codex',
+        'on',
+        '--manifest',
+        box.path('link/loadout.toml'),
+        '--state',
+        box.path('state.json'),
+      ],
+      { env: { ...process.env, HOME: box.home, NO_COLOR: '1' } },
+    );
+    assert.equal(await box.read('skills.toml'), skill('review', '["claude", "codex"]'));
+    assert.equal(await readlink(box.path('link/loadout.toml')), box.path('loadout.toml'));
   });
 
   test('release edits the included file', async () => {

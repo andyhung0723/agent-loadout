@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,5 +29,17 @@ async function realpathOrNull(input: string): Promise<string | null> {
     return await realpath(input);
   } catch {
     return null;
+  }
+}
+
+/**
+ * The manifest is often a symlink into a config repository. Work on the real file so includes
+ * resolve next to it and edits don't replace the link with a copy.
+ */
+export function followLink(file: string): string {
+  try {
+    return realpathSync(file);
+  } catch {
+    return file;
   }
 }

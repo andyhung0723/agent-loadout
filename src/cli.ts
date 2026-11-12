@@ -30,7 +30,13 @@ import { scanSharedCodexSkills } from './shared.ts';
 import { toggleInManifest } from './toggle.ts';
 import { findUnmanaged } from './unmanaged.ts';
 import { exists } from './observe.ts';
-import { collapseHome, DEFAULT_MANIFEST_PATH, DEFAULT_STATE_PATH, expandHome } from './paths.ts';
+import {
+  collapseHome,
+  DEFAULT_MANIFEST_PATH,
+  DEFAULT_STATE_PATH,
+  expandHome,
+  followLink,
+} from './paths.ts';
 import { BLOCKED_ACTIONS, buildPlan, type Plan } from './planner.ts';
 import {
   renderApply,
@@ -124,8 +130,8 @@ export async function main(argv: string[]): Promise<number> {
 
   const { values, positionals } = parsed;
   const context: Context = {
-    manifestPath: expandHome(
-      values.manifest ?? process.env.LOADOUT_MANIFEST ?? DEFAULT_MANIFEST_PATH,
+    manifestPath: followLink(
+      expandHome(values.manifest ?? process.env.LOADOUT_MANIFEST ?? DEFAULT_MANIFEST_PATH),
     ),
     statePath: expandHome(values.state ?? process.env.LOADOUT_STATE ?? DEFAULT_STATE_PATH),
     json: values.json,

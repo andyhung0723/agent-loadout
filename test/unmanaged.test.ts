@@ -56,6 +56,20 @@ to = ["claude"]
   ]);
 });
 
+test('an agent the manifest renders is not reported as hand-written', async () => {
+  await box.write('src/agents/worker.md', '---\nname: worker\ndescription: Works.\n---\n\nWork.\n');
+  const manifest = box.manifest(
+    `[[agent]]\nname = "worker"\npath = "~/src/agents/worker.md"\nto = ["claude", "codex"]\n`,
+  );
+  await box.write('.claude/agents/worker.md', 'rendered\n');
+  await box.write('.codex/agents/worker.toml', 'rendered\n');
+  await box.write('.codex/agents/other.toml', 'hand-written\n');
+  assert.deepEqual(
+    (await findUnmanaged(manifest, resolver, box.home)).map((item) => item.location),
+    ['~/.codex/agents/other.toml'],
+  );
+});
+
 test('a manifest that covers everything reports nothing', async () => {
   await symlink(box.path('src/skills/review'), box.path('.claude/skills/review'));
   const manifest = box.manifest(`[[skill]]\nname = "review"\nfrom = "mine"\nto = ["claude"]\n`);

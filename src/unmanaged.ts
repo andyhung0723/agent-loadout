@@ -1,6 +1,6 @@
 import { scanTarget } from './importer.ts';
 import { configKey, isProject, type Kind, type Manifest, type Resource } from './manifest.ts';
-import { collapseHome } from './paths.ts';
+import { collapseHome, expandHome } from './paths.ts';
 import type { SecretResolver } from './secrets.ts';
 import { scanSharedCodexSkills } from './shared.ts';
 import { describeLocation, desiredUnits, type Unit } from './units.ts';
@@ -24,7 +24,12 @@ export async function findUnmanaged(
   secrets: SecretResolver,
   home: string,
 ): Promise<UnmanagedItem[]> {
-  const managed = new Set((await desiredUnits(manifest, secrets)).map(signature));
+  const desired = await desiredUnits(manifest, secrets);
+  const managed = new Set(desired.map(signature));
+  // Files the manifest writes (rendered agents, links) are covered whatever they look like.
+  const managedFiles = new Set(
+    desired.filter((unit) => unit.pointer.length === 0).map((u) => u.file),
+  );
   const items: UnmanagedItem[] = [];
 
   // Project targets aren't scanned yet: a repository's .claude/ is mostly the team's, not ours.
@@ -47,6 +52,7 @@ export async function findUnmanaged(
       });
     }
     for (const entry of scan.unmanaged) {
+      if (managedFiles.has(expandHome(entry.location, home))) continue;
       items.push({
         target: entry.target,
         kind: entry.kind,
