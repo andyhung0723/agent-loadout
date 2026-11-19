@@ -59,7 +59,7 @@ describe('capture', () => {
     );
     const before = await box.read('.codex/config.toml');
 
-    const { stdout } = await cli('capture', 'mcp:context7', 'codex');
+    const { stdout } = await cli('capture', 'mcp:context7', 'codex', '--secrets', 'keychain');
     assert.doesNotMatch(stdout, /ctx7sk/);
     assert.match(stdout, /moved to the keychain: \$\{keychain:agent-loadout\/context7\}/);
     assert.match(
@@ -117,7 +117,11 @@ describe('capture', () => {
       '.codex/config.toml',
       `[mcp_servers.context7]\ncommand = "npx"\nargs = ${JSON.stringify(context7.args)}\n`,
     );
-    await fails(['capture', 'mcp:context7', 'codex'], 2, /already holds a different value/);
+    await fails(
+      ['capture', 'mcp:context7', 'codex', '--secrets', 'keychain'],
+      2,
+      /already holds a different value/,
+    );
     assert.equal(await box.read('loadout.toml'), TARGETS);
   });
 });
